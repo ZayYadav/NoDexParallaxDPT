@@ -35,7 +35,9 @@ static JNINativeMethod gMethods[] = {
         {"cbde",   "(Ljava/lang/ClassLoader;)V",  (void *) combineDexElements},
         {"rde",   "(Ljava/lang/ClassLoader;Ljava/lang/String;)V",        (void *) removeDexElements},
         {"ra", "(Ljava/lang/String;)Ljava/lang/Object;",                               (void *) replaceApplication},
-        {"clinit", "()V",                               (void *) clinit}
+        {"clinit", "()V",                               (void *) clinit},
+        {"securityStatus", "(Landroid/content/Context;)I",                (void *) securityStatus},
+        {"scheduleExit", "(I)V",                                         (void *) scheduleExit}
 };
 
 PARALLAX_ENCRYPT jobjectArray makePathElements(JNIEnv* env,const char *pathChs) {
@@ -423,10 +425,8 @@ int getRandom(int l, int r) {
 }
 
 PARALLAX_ENCRYPT void clinit(JNIEnv *env, jclass) {
-    int rand = getRandom(1, 100);
-    if(rand % 2 == 0) {
-        veritySignature(env);
-    }
+    // Signature integrity is deterministic now; no probabilistic skip.
+    veritySignature(env);
 }
 
 PARALLAX_ENCRYPT void callRealApplicationOnCreate(JNIEnv *env, jclass, jstring realApplicationClassName) {
