@@ -364,16 +364,21 @@ public class ZipUtils {
      * @param zipPath zip apk path
      */
     public static void zip(String dirPath, String zipPath, boolean smaller) {
-        // The runtime already supports a compressed code-item store (the former -S path),
-        // so use it for every finalized package without disabling the normal DEX hardening.
-        doNotCompress.removeAll(biggerFileList);
-
         ZipOutputStream zos = null;
         try {
             File zip = new File(zipPath);
             if(zip.exists()) {
                 zip.delete();
             }
+
+            File dir = new File(dirPath);
+            boolean protectedApkWorkspace = isProtectedApkWorkspace(dir);
+            // The generated code-item store is safe to DEFLATE in a normal protected APK.
+            // Keep an unrelated native-only APK's assets unchanged unless -S was explicitly used.
+            if (protectedApkWorkspace || smaller) {
+                doNotCompress.removeAll(biggerFileList);
+            }
+
             CheckedOutputStream cos = new CheckedOutputStream(Files.newOutputStream(zip.toPath()), new CRC32());
             zos = new ZipOutputStream(cos);
             zos.setLevel(Deflater.BEST_COMPRESSION);
@@ -382,10 +387,9 @@ public class ZipUtils {
                 check = check.replaceAll("/", Matcher.quoteReplacement(File.separator));
                 doNotCompress.set(i, check);
             }
-            File dir = new File(dirPath);
-            boolean recompressNativeLibraries = isProtectedApkWorkspace(dir);
+            boolean recompressNativeLibraries = protectedApkWorkspace;
             LogUtils.info("Final package size optimization: max deflate%s",
-                    recompressNativeLibraries ? ", native libs compacted" : "");
+                    recompressNativeLibraries ? ", code store + native libs compacted" : "");
             compress(dir, zos, "", doNotCompress, resConflictFiles, recompressNativeLibraries);
             zos.flush();
         } catch (Exception e) {
