@@ -12,6 +12,11 @@ public final class Global {
     public static volatile boolean sIsReplacedClassLoader = false;
     public static volatile boolean sNeedCalledApplication = true;
 
+    // Kept only so optional source files continue to compile. The tiny bootstrap does not
+    // reference these fields, therefore R8 can remove them together with those helpers.
+    public static volatile boolean sRootBlocked = false;
+    public static volatile int sProtectionBlockReason = 0;
+
     private Global() {
     }
 }
