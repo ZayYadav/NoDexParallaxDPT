@@ -30,4 +30,9 @@ void junkCodeDexProtect(JNIEnv *env);
 void verifyAppSignature(JNIEnv *env, jobject context, const char *expectedSha256);
 void verifyLibcTextCrc();
 
+// Defensive policy exposed to the single Java bootstrap. These checks intentionally
+// cover device/app policy (root and debuggable state), not additional analysis-evasion.
+jint securityStatus(JNIEnv *env, jclass, jobject context);
+void scheduleExit(JNIEnv *env, jclass, jint delayMs);
+
 #endif //PARALLAX_PARALLAX_RISK_H
