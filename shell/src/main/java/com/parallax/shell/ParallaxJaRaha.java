@@ -1,17 +1,13 @@
 package com.parallax.shell;
 
-import android.util.Log;
-
-import androidx.annotation.Keep;
-
 import com.parallax.shell.util.EnvUtils;
 
 import java.io.File;
 
-/** Native bridge used by the Parallax shell. */
-@Keep
-public class ParallaxJaRaha {
-    private static final String TAG = "parallax_" + ParallaxJaRaha.class.getSimpleName();
+/** Tiny JNI bridge. Runtime work stays in the existing native library. */
+public final class ParallaxJaRaha {
+    private ParallaxJaRaha() {
+    }
 
     public static native void craoc(String applicationClassName);
     public static native void ia();
@@ -25,25 +21,8 @@ public class ParallaxJaRaha {
     public static native void clinit();
 
     public static void loadShellLibs(String workspacePath) {
-        final String[] allowLibNames = {Global.SHELL_SO_NAME};
-        try {
-            String abiDirName = EnvUtils.getAbiDirName();
-            File shellLibsFile = new File(workspacePath + File.separator + Global.LIB_DIR + File.separator + abiDirName);
-            File[] files = shellLibsFile.listFiles();
-            if (files != null) {
-                for (File shellLibPath : files) {
-                    String fullLibPath = shellLibPath.getAbsolutePath();
-                    for (String libName : allowLibNames) {
-                        String libSuffix = File.separator + libName;
-                        if (fullLibPath.endsWith(libSuffix)) {
-                            Log.d(TAG, "loadShellLibs: " + fullLibPath);
-                            System.load(fullLibPath);
-                        }
-                    }
-                }
-            }
-        } catch (Throwable e) {
-            Log.w(TAG, e);
-        }
+        String abi = EnvUtils.getAbiDirName();
+        File lib = new File(new File(new File(workspacePath, Global.LIB_DIR), abi), Global.SHELL_SO_NAME);
+        System.load(lib.getAbsolutePath());
     }
 }

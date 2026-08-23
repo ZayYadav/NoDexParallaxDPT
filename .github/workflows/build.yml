@@ -1,0 +1,135 @@
+name: Build ParallaxDPT
+
+on:
+  push:
+    branches:
+      - main
+      - 'ci/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: parallax-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Restore pinned native dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          fetch_dep() {
+            local url="$1"
+            local path="$2"
+            local sha="$3"
+            rm -rf "$path"
+            git init -q "$path"
+            git -C "$path" remote add origin "$url"
+            git -C "$path" fetch -q --depth 1 origin "$sha"
+            git -C "$path" checkout -q --detach FETCH_HEAD
+            git -C "$path" submodule update --init --recursive --depth 1
+            echo "$(basename "$path"): $(git -C "$path" rev-parse HEAD)"
+          }
+
+          # Match the revisions currently referenced by upstream luoyesiqiu/dpt-shell/main.
+          fetch_dep https://github.com/zlib-ng/minizip-ng.git shell/src/main/cpp/external/minizip-ng fe5fedc365f7824ada0cf9a84fb79b30d5fc97a8
+          fetch_dep https://github.com/bytedance/bhook.git shell/src/main/cpp/external/bhook c0a83d41e0820506068031149f5f0057cde0abfe
+          fetch_dep https://github.com/luoyesiqiu/Dobby.git shell/src/main/cpp/external/Dobby f2f8a6a825d2c43aea598012b0dc8685eb6f651a
+          fetch_dep https://github.com/Mbed-TLS/mbedtls.git shell/src/main/cpp/external/mbedtls e185d7fd85499c8ce5ca2a54f5cf8fe7dbe3f8df
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "cmake;3.31.1" \
+            "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - name: Clean
+        shell: bash
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon clean
+
+      - name: Build release shell and CLI
+        shell: bash
+        run: |
+          ./gradlew --no-daemon :shell:assembleRelease :parallax:jar
+
+      - name: Verify build outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s executable/parallax.jar
+          DEX=executable/shell-files/dex/classes.dex
+          test -s "$DEX"
+
+          DEX_SIZE=$(stat -c '%s' "$DEX")
+          CLASS_DEFS=$(python3 - "$DEX" <<'PY'
+          import struct, sys
+          p = sys.argv[1]
+          with open(p, 'rb') as f:
+              header = f.read(112)
+          if len(header) < 112 or not header.startswith(b'dex\n'):
+              raise SystemExit('invalid dex header')
+          print(struct.unpack_from('<I', header, 96)[0])
+          PY
+          )
+
+          echo "Single bootstrap DEX: ${DEX_SIZE} bytes, ${CLASS_DEFS} class definition(s)"
+          echo "### Single-class bootstrap DEX" >> "$GITHUB_STEP_SUMMARY"
+          echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
+          echo "- class definitions: ${CLASS_DEFS}" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$CLASS_DEFS" -ne 1 ]; then
+            echo "Expected exactly one shell class definition, got ${CLASS_DEFS}" >&2
+            exit 1
+          fi
+
+          if [ "$DEX_SIZE" -gt 98304 ]; then
+            echo "Bootstrap DEX is larger than 96 KiB (${DEX_SIZE} bytes)" >&2
+            exit 1
+          fi
+
+          for abi in arm arm64 x86 x86_64; do
+            test -s "executable/shell-files/libs/${abi}/ParallaxLover.so"
+          done
+
+          echo "Build outputs verified:"
+          find executable -maxdepth 4 -type f -print | sort
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: NoDexParallaxDPT-${{ github.sha }}
+          path: |
+            executable/parallax.jar
+            executable/shell-files/**
+          if-no-files-found: error
+          retention-days: 14

@@ -1,4 +1,4 @@
-# Parallax shell rules.
+# Single-class Parallax bootstrap rules.
 -assumenosideeffects class android.util.Log {
     public static int d(...);
     public static int e(...);
@@ -7,26 +7,10 @@
     public static int v(...);
 }
 
+# This is the only shell class that must survive release shrinking. It is both the
+# Android Application entry point and the JNI registration target.
+-keep,allowoptimization class com.parallax.shell.ParallaxKoChummiDedo { *; }
+
+# All legacy helper/bridge/factory classes are intentionally shrinkable and should
+# disappear from the release DEX when unreferenced.
 -repackageclasses com.parallax.shell
-
--keep class com.parallax.shell.ParallaxJaRaha { *; }
--keep class com.parallax.shell.ParallaxKoChummiDedo { *; }
--keep class com.parallax.shell.ParallaxLovers { *; }
--keep class com.parallax.shell.ParallaxLovers$* { *; }
-
-# Requested branded protection entry points keep their class names.
--keepnames class com.parallax.shell.ParallaxHuMaalik
--keepnames class com.parallax.shell.ParallaxKaBhaiJangu
--keepnames class com.parallax.shell.ParallaxVirtualBhaiya
--keepnames class com.parallax.shell.ParallaxBhaiKiSecurity
--keepnames class com.parallax.shell.ParallaxBhaiya
-
-# JNI symbol uses the exact class/method name; keep just that member stable.
--keepclassmembers class com.parallax.shell.ParallaxBhaiya {
-    private static native int nativeEnvironmentState();
-}
-
-# Preserve the requested public security class name while allowing member optimization.
--keepnames class com.parallax.shell.ParallaxHuYaarBhai
-
--keep class com.parallax.parallax.ParallaxAaGaya { *; }

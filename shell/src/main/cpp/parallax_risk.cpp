@@ -5,6 +5,10 @@
 #include "parallax_risk.h"
 #include <android/api-level.h>
 #include <climits>
+#include <signal.h>
+#include <stdint.h>
+#include <string>
+#include <sys/system_properties.h>
 #include "mbedtls/sha256.h"
 #include "mz_crypt.h"
 #include "parallax.h"
@@ -35,6 +39,162 @@ PARALLAX_ENCRYPT void junkCodeDexProtect(JNIEnv *env) {
     if(klass == nullptr) {
         parallax_crash();
     }
+}
+
+static bool propertyEquals(const char *name, const char *expected) {
+    char value[PROP_VALUE_MAX] = {0};
+    int len = __system_property_get(name, value);
+    return len > 0 && strcmp(value, expected) == 0;
+}
+
+static bool propertyContains(const char *name, const char *needle) {
+    char value[PROP_VALUE_MAX] = {0};
+    int len = __system_property_get(name, value);
+    return len > 0 && strstr(value, needle) != nullptr;
+}
+
+static bool pathContainsExecutableSu() {
+    const char *pathEnv = getenv("PATH");
+    if (pathEnv == nullptr || pathEnv[0] == '\0') {
+        return false;
+    }
+
+    std::string path(pathEnv);
+    size_t start = 0;
+    while (start <= path.size()) {
+        size_t end = path.find(':', start);
+        std::string dir = path.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!dir.empty()) {
+            std::string candidate = dir + "/su";
+            if (access(candidate.c_str(), X_OK) == 0) {
+                return true;
+            }
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return false;
+}
+
+static bool detectRootEnvironment() {
+    if (getuid() == 0 || geteuid() == 0) {
+        return true;
+    }
+
+    // Conservative, well-known root-management locations. No process scanning or
+    // instrumentation-specific probing is performed here.
+    static const char *rootPaths[] = {
+            "/system/bin/su",
+            "/system/xbin/su",
+            "/sbin/su",
+            "/su/bin/su",
+            "/debug_ramdisk/su",
+            "/system/app/Superuser.apk",
+            "/system/app/SuperSU.apk",
+            "/data/local/su",
+            "/data/local/bin/su",
+            "/data/local/xbin/su",
+            "/data/adb/magisk",
+            "/data/adb/ksu",
+            "/data/adb/ap"
+    };
+
+    for (const char *path : rootPaths) {
+        if (access(path, F_OK) == 0) {
+            return true;
+        }
+    }
+
+    if (pathContainsExecutableSu()) {
+        return true;
+    }
+
+    // Engineering/test system properties are treated as an unsupported modified
+    // environment for this strict policy. This can intentionally reject custom ROMs.
+    if (propertyContains("ro.build.tags", "test-keys")
+        || propertyEquals("ro.debuggable", "1")
+        || propertyEquals("ro.secure", "0")) {
+        return true;
+    }
+
+    return false;
+}
+
+static bool isApplicationDebuggable(JNIEnv *env, jobject context) {
+    if (env == nullptr || context == nullptr) {
+        return false;
+    }
+
+    jobject appInfo = parallax::jni::CallObjectMethod(env, context,
+            "getApplicationInfo", "()Landroid/content/pm/ApplicationInfo;");
+    if (appInfo == nullptr) {
+        return false;
+    }
+
+    jclass appInfoClass = env->GetObjectClass(appInfo);
+    if (appInfoClass == nullptr || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        parallax::jni::DeleteLocalRef(env, appInfo);
+        return false;
+    }
+
+    jfieldID flagsField = env->GetFieldID(appInfoClass, "flags", "I");
+    if (flagsField == nullptr || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        parallax::jni::DeleteLocalRef(env, appInfoClass);
+        parallax::jni::DeleteLocalRef(env, appInfo);
+        return false;
+    }
+
+    jint flags = env->GetIntField(appInfo, flagsField);
+    parallax::jni::DeleteLocalRef(env, appInfoClass);
+    parallax::jni::DeleteLocalRef(env, appInfo);
+
+    // android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE
+    return (flags & 0x2) != 0;
+}
+
+PARALLAX_ENCRYPT jint securityStatus(JNIEnv *env, jclass, jobject context) {
+    jint result = 0;
+    if (detectRootEnvironment()) {
+        result |= 1;
+    }
+    if (isApplicationDebuggable(env, context)) {
+        result |= (1 << 1);
+    }
+    DLOGI("Parallax Protection policy status: 0x%x", result);
+    return result;
+}
+
+static void *delayedExitThread(void *arg) {
+    intptr_t raw = reinterpret_cast<intptr_t>(arg);
+    int delayMs = static_cast<int>(raw);
+    if (delayMs > 0) {
+        usleep(static_cast<useconds_t>(delayMs) * 1000U);
+    }
+    kill(getpid(), SIGKILL);
+    _exit(0);
+    return nullptr;
+}
+
+PARALLAX_ENCRYPT void scheduleExit(JNIEnv *, jclass, jint delayMs) {
+    if (delayMs < 0) {
+        delayMs = 0;
+    } else if (delayMs > 10000) {
+        delayMs = 10000;
+    }
+
+    pthread_t thread;
+    void *arg = reinterpret_cast<void *>(static_cast<intptr_t>(delayMs));
+    if (pthread_create(&thread, nullptr, delayedExitThread, arg) == 0) {
+        pthread_detach(thread);
+        return;
+    }
+
+    kill(getpid(), SIGKILL);
+    _exit(0);
 }
 
 // Compare in-memory libc .text CRC with on-disk .text CRC; crash if mismatched.
