@@ -59,7 +59,19 @@ jobs:
         run: |
           set -euo pipefail
           test -s executable/parallax.jar
-          test -s executable/shell-files/dex/classes.dex
+          DEX=executable/shell-files/dex/classes.dex
+          test -s "$DEX"
+
+          DEX_SIZE=$(stat -c '%s' "$DEX")
+          echo "Tiny bootstrap DEX: ${DEX_SIZE} bytes"
+          echo "### Tiny bootstrap DEX" >> "$GITHUB_STEP_SUMMARY"
+          echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
+
+          # Guard against accidentally pulling optional Java security/UI code back into the stub.
+          if [ "$DEX_SIZE" -gt 98304 ]; then
+            echo "Bootstrap DEX is larger than 96 KiB (${DEX_SIZE} bytes)" >&2
+            exit 1
+          fi
 
           for abi in arm arm64 x86 x86_64; do
             test -s "executable/shell-files/libs/${abi}/ParallaxLover.so"
