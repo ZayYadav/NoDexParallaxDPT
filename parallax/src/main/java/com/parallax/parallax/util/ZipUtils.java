@@ -27,6 +27,7 @@ import java.util.regex.Matcher;
 import java.util.zip.CRC32;
 import java.util.zip.CheckedInputStream;
 import java.util.zip.CheckedOutputStream;
+import java.util.zip.Deflater;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -58,6 +59,18 @@ public class ZipUtils {
                 || upper.endsWith(".RSA")
                 || upper.endsWith(".DSA")
                 || upper.endsWith(".EC");
+    }
+
+    /**
+     * A normal protected APK always has the generated shell config and shell classes.dex.
+     * Native-only/zero-DEX mode intentionally has neither, so it keeps the input native
+     * library storage policy unchanged.
+     */
+    private static boolean isProtectedApkWorkspace(File rootDir) {
+        File config = new File(rootDir,
+                "assets" + File.separator + Const.KEY_SHELL_CONFIG_STORE_NAME);
+        File dex = new File(rootDir, "classes.dex");
+        return config.isFile() && dex.isFile();
     }
 
     /**
@@ -351,9 +364,10 @@ public class ZipUtils {
      * @param zipPath zip apk path
      */
     public static void zip(String dirPath, String zipPath, boolean smaller) {
-        if(smaller) {
-            doNotCompress.removeAll(biggerFileList);
-        }
+        // The runtime already supports a compressed code-item store (the former -S path),
+        // so use it for every finalized package without disabling the normal DEX hardening.
+        doNotCompress.removeAll(biggerFileList);
+
         ZipOutputStream zos = null;
         try {
             File zip = new File(zipPath);
@@ -362,13 +376,17 @@ public class ZipUtils {
             }
             CheckedOutputStream cos = new CheckedOutputStream(Files.newOutputStream(zip.toPath()), new CRC32());
             zos = new ZipOutputStream(cos);
+            zos.setLevel(Deflater.BEST_COMPRESSION);
             for (int i = 0; i < doNotCompress.size(); i++) {
                 String check = doNotCompress.get(i);
                 check = check.replaceAll("/", Matcher.quoteReplacement(File.separator));
                 doNotCompress.set(i, check);
             }
             File dir = new File(dirPath);
-            compress(dir, zos, "", doNotCompress, resConflictFiles);
+            boolean recompressNativeLibraries = isProtectedApkWorkspace(dir);
+            LogUtils.info("Final package size optimization: max deflate%s",
+                    recompressNativeLibraries ? ", native libs compacted" : "");
+            compress(dir, zos, "", doNotCompress, resConflictFiles, recompressNativeLibraries);
             zos.flush();
         } catch (Exception e) {
             e.printStackTrace();
@@ -378,33 +396,32 @@ public class ZipUtils {
     }
 
     private static void compress(File srcFile, ZipOutputStream zos, String basePath,
-                                 List<String> doNotCompress, Map<String, String> resConflictFiles) throws Exception {
+                                 List<String> doNotCompress, Map<String, String> resConflictFiles,
+                                 boolean recompressNativeLibraries) throws Exception {
         if (srcFile.isDirectory()) {
-            compressDir(srcFile, zos, basePath, doNotCompress, resConflictFiles);
+            compressDir(srcFile, zos, basePath, doNotCompress, resConflictFiles, recompressNativeLibraries);
         } else {
-            compressFile(srcFile, zos, basePath, doNotCompress, resConflictFiles);
+            compressFile(srcFile, zos, basePath, doNotCompress, resConflictFiles, recompressNativeLibraries);
         }
     }
 
     private static void compressDir(File dir, ZipOutputStream zos, String basePath,
-                                    List<String> doNotCompress, Map<String, String> resConflictFiles) throws Exception {
+                                    List<String> doNotCompress, Map<String, String> resConflictFiles,
+                                    boolean recompressNativeLibraries) throws Exception {
         File[] files = dir.listFiles();
-        if (files == null) {
+        if (files == null || files.length == 0) {
+            // Empty directory entries are not needed by Android and only add ZIP overhead.
             return;
         }
-        if (files.length == 0) {
-            String entryName = basePath + dir.getName() + "/";
-            ZipEntry entry = new ZipEntry(entryName);
-            zos.putNextEntry(entry);
-            zos.closeEntry();
-        }
         for (File file : files) {
-            compress(file, zos, basePath + dir.getName() + "/", doNotCompress, resConflictFiles);
+            compress(file, zos, basePath + dir.getName() + "/", doNotCompress, resConflictFiles,
+                    recompressNativeLibraries);
         }
     }
 
     private static void compressFile(File file, ZipOutputStream zos, String dir,
-                                     List<String> doNotCompress, Map<String, String> resConflictFiles) throws Exception {
+                                     List<String> doNotCompress, Map<String, String> resConflictFiles,
+                                     boolean recompressNativeLibraries) throws Exception {
         String fileName = file.getName();
         if (resConflictFiles.containsKey(fileName)) {
             fileName = resConflictFiles.get(fileName);
@@ -429,10 +446,20 @@ public class ZipUtils {
             buffer.append("/");
         }
 
-        ZipEntry entry = new ZipEntry(buffer.substring(1));
+        String entryName = buffer.substring(1);
+        ZipEntry entry = new ZipEntry(entryName);
         String rawPath = file.getAbsolutePath();
         int index = rawPath.indexOf(dirNameNew[0]);
-        if (index != -1 && doNotCompress.contains(rawPath.substring(index + 1 + dirNameNew[0].length()))) {
+        String relativePath = index != -1
+                ? rawPath.substring(index + 1 + dirNameNew[0].length())
+                : "";
+        boolean wasStored = index != -1 && doNotCompress.contains(relativePath);
+        boolean isNativeLibrary = entryName.startsWith("lib/") && entryName.endsWith(".so");
+
+        // Normal protected APKs explicitly set extractNativeLibs=true, so their native
+        // libraries may be DEFLATED safely. Native-only/zero-DEX packages keep the input
+        // storage mode because they may depend on direct mmap loading.
+        if (wasStored && !(recompressNativeLibraries && isNativeLibrary)) {
             entry.setMethod(ZipEntry.STORED);
             entry.setSize(file.length());
             entry.setCrc(calFileCRC32(file));
@@ -440,8 +467,8 @@ public class ZipUtils {
         zos.putNextEntry(entry);
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(file))) {
             int count;
-            byte[] data = new byte[1024];
-            while ((count = bis.read(data, 0, 1024)) != -1) {
+            byte[] data = new byte[8192];
+            while ((count = bis.read(data, 0, data.length)) != -1) {
                 zos.write(data, 0, count);
             }
         }
@@ -452,7 +479,10 @@ public class ZipUtils {
         try (FileInputStream fi = new FileInputStream(file);
              CheckedInputStream checksum = new CheckedInputStream(fi, new CRC32());
              BufferedInputStream in = new BufferedInputStream(checksum)) {
-            while (in.read() != -1);
+            byte[] buffer = new byte[8192];
+            while (in.read(buffer) != -1) {
+                // consume stream
+            }
             return checksum.getChecksum().getValue();
         }
     }
