@@ -1,4 +1,5 @@
-# Parallax shell rules.
+# Tiny Parallax bootstrap rules.
+# Logging is stripped from release builds.
 -assumenosideeffects class android.util.Log {
     public static int d(...);
     public static int e(...);
@@ -7,26 +8,14 @@
     public static int v(...);
 }
 
--repackageclasses com.parallax.shell
-
--keep class com.parallax.shell.ParallaxJaRaha { *; }
--keep class com.parallax.shell.ParallaxKoChummiDedo { *; }
--keep class com.parallax.shell.ParallaxLovers { *; }
--keep class com.parallax.shell.ParallaxLovers$* { *; }
-
-# Requested branded protection entry points keep their class names.
--keepnames class com.parallax.shell.ParallaxHuMaalik
--keepnames class com.parallax.shell.ParallaxKaBhaiJangu
--keepnames class com.parallax.shell.ParallaxVirtualBhaiya
--keepnames class com.parallax.shell.ParallaxBhaiKiSecurity
--keepnames class com.parallax.shell.ParallaxBhaiya
-
-# JNI symbol uses the exact class/method name; keep just that member stable.
--keepclassmembers class com.parallax.shell.ParallaxBhaiya {
-    private static native int nativeEnvironmentState();
+# Keep the manifest/JNI entry-point names stable, but allow R8 to optimize their bodies.
+-keep,allowoptimization class com.parallax.shell.ParallaxKoChummiDedo { *; }
+-keep,allowoptimization class com.parallax.shell.ParallaxLovers { *; }
+-keep,allowoptimization class com.parallax.shell.ParallaxJaRaha {
+    public static native <methods>;
+    public static void loadShellLibs(java.lang.String);
 }
 
-# Preserve the requested public security class name while allowing member optimization.
--keepnames class com.parallax.shell.ParallaxHuYaarBhai
-
--keep class com.parallax.parallax.ParallaxAaGaya { *; }
+# Everything else is intentionally shrinkable. Optional Java-side protection UI/helpers
+# are not part of the tiny bootstrap and should disappear when unreferenced.
+-repackageclasses com.parallax.shell
