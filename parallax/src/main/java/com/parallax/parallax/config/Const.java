@@ -76,7 +76,8 @@ public class Const {
     // Package compiled into the shell dex before the build-time rename pass.
     public static final String DEFAULT_SHELL_PACKAGE_NAME = "com/parallax/shell";
     // Branded package emitted into protected APKs unless a custom config overrides it.
-    public static final String BRANDED_SHELL_PACKAGE_NAME = "Parallax.Aapka.bhai.hai";
+    // UI brand remains human-readable as "Parallax Protection".
+    public static final String BRANDED_SHELL_PACKAGE_NAME = "com.parallax.protection";
     public static final String SHELL_PACKAGE_NAME_AUTO = "<random>";
     public static final String RANDOM_DIR_NAME = StringUtils.generateIdentifier(16);
 }
