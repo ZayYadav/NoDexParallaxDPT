@@ -91,9 +91,26 @@ jobs:
           test -s "$DEX"
 
           DEX_SIZE=$(stat -c '%s' "$DEX")
-          echo "Tiny bootstrap DEX: ${DEX_SIZE} bytes"
-          echo "### Tiny bootstrap DEX" >> "$GITHUB_STEP_SUMMARY"
+          CLASS_DEFS=$(python3 - "$DEX" <<'PY'
+          import struct, sys
+          p = sys.argv[1]
+          with open(p, 'rb') as f:
+              header = f.read(112)
+          if len(header) < 112 or not header.startswith(b'dex\n'):
+              raise SystemExit('invalid dex header')
+          print(struct.unpack_from('<I', header, 96)[0])
+          PY
+          )
+
+          echo "Single bootstrap DEX: ${DEX_SIZE} bytes, ${CLASS_DEFS} class definition(s)"
+          echo "### Single-class bootstrap DEX" >> "$GITHUB_STEP_SUMMARY"
           echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
+          echo "- class definitions: ${CLASS_DEFS}" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$CLASS_DEFS" -ne 1 ]; then
+            echo "Expected exactly one shell class definition, got ${CLASS_DEFS}" >&2
+            exit 1
+          fi
 
           if [ "$DEX_SIZE" -gt 98304 ]; then
             echo "Bootstrap DEX is larger than 96 KiB (${DEX_SIZE} bytes)" >&2
