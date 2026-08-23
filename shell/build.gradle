@@ -10,6 +10,7 @@ plugins {
 android {
     namespace 'com.parallax.parallax'
     compileSdk rootProject.ext.compileSdkVersion
+    ndkVersion '27.0.12077973'
 
     buildFeatures {
         buildConfig = true
@@ -200,17 +201,17 @@ afterEvaluate { Project project ->
     def buildTask = assembleTask
     def nativeBuildTask = nativeReleaseBuildTask
     def debug = false
-    if(firstTaskName == "shell:assemble" || firstTaskName == "assemble") {
+    if(firstTaskName == "shell:assemble" || firstTaskName == "assemble" || firstTaskName == ":shell:assemble") {
         buildTask = assembleTask
         nativeBuildTask = nativeReleaseBuildTask
         debug = false
     }
-    else if(firstTaskName == "shell:assembleRelease" || firstTaskName == "assembleRelease") {
+    else if(firstTaskName == "shell:assembleRelease" || firstTaskName == "assembleRelease" || firstTaskName == ":shell:assembleRelease") {
         buildTask = assembleReleaseTask
         nativeBuildTask = nativeReleaseBuildTask
         debug = false
     }
-    else if(firstTaskName == "shell:assembleDebug" || firstTaskName == "assembleDebug") {
+    else if(firstTaskName == "shell:assembleDebug" || firstTaskName == "assembleDebug" || firstTaskName == ":shell:assembleDebug") {
         buildTask = assembleDebugTask
         nativeBuildTask = nativeDebugBuildTask
         debug = true
