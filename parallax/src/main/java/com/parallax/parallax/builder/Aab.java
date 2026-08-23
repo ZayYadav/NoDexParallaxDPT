@@ -34,7 +34,7 @@ public class Aab extends AndroidPackage {
 
     @Override
     public String getProxyComponentFactory() {
-        return String.format(Locale.US, "%s.%s", ShellConfig.getInstance().getShellPackageName(), "ParallaxLovers");
+        return "android.app.AppComponentFactory";
     }
 
     @Override
