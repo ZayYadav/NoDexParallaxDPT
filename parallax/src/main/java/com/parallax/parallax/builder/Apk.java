@@ -37,7 +37,9 @@ public class Apk extends AndroidPackage {
 
     @Override
     public String getProxyComponentFactory() {
-        return String.format(Locale.US, "%s.%s", ShellConfig.getInstance().getShellPackageName(), "ParallaxLovers");
+        // Keep the shell DEX single-class. The framework factory is available before the
+        // protected app's classes are restored by the Application bootstrap.
+        return "android.app.AppComponentFactory";
     }
 
     @Override
