@@ -25,6 +25,21 @@ constexpr jint SECURITY_TRACER = 1 << 2;
 constexpr jint SECURITY_HOOK_FRAMEWORK = 1 << 3;
 constexpr jint SECURITY_PAYLOAD_TAMPER = 1 << 4;
 std::atomic<bool> g_risk_thread_started{false};
+std::atomic<jint> g_reported_security_state{0};
+}
+
+void reportSecurityRisk(jint riskBits) {
+    if (riskBits != 0) {
+        g_reported_security_state.fetch_or(riskBits, std::memory_order_relaxed);
+    }
+}
+
+jint getSecurityRiskState() {
+    return g_reported_security_state.load(std::memory_order_relaxed);
+}
+
+PARALLAX_ENCRYPT jint runtimeSecurityState(JNIEnv *, jclass) {
+    return getSecurityRiskState();
 }
 
 PARALLAX_ENCRYPT NO_INLINE void parallax_crash() {
@@ -387,7 +402,7 @@ static bool verifyProtectedDexPayload(JNIEnv *env) {
 }
 
 PARALLAX_ENCRYPT jint securityStatus(JNIEnv *env, jclass, jobject context) {
-    jint result = 0;
+    jint result = getSecurityRiskState();
     if (detectRootEnvironment()) {
         result |= SECURITY_ROOT;
     }
@@ -403,6 +418,7 @@ PARALLAX_ENCRYPT jint securityStatus(JNIEnv *env, jclass, jobject context) {
     if (!verifyProtectedDexPayload(env)) {
         result |= SECURITY_PAYLOAD_TAMPER;
     }
+    reportSecurityRisk(result & (SECURITY_TRACER | SECURITY_HOOK_FRAMEWORK | SECURITY_PAYLOAD_TAMPER));
     DLOGI("Parallax Protection policy status: 0x%x", result);
     return result;
 }
@@ -436,7 +452,7 @@ PARALLAX_ENCRYPT void scheduleExit(JNIEnv *, jclass, jint delayMs) {
     _exit(0);
 }
 
-// Compare in-memory libc .text CRC with on-disk .text CRC; crash if mismatched.
+// Compare in-memory libc .text CRC with on-disk .text CRC; report if mismatched.
 PARALLAX_ENCRYPT NO_INLINE void verifyLibcTextCrc() {
     Dl_info info = {};
     if (dladdr(reinterpret_cast<const void *>(&fopen), &info) == 0
@@ -521,7 +537,7 @@ PARALLAX_ENCRYPT NO_INLINE void verifyLibcTextCrc() {
           static_cast<unsigned>(shdr.sh_size));
     if (crc_file != crc_mem) {
         DLOGW("libc .text crc mismatch, file=%08x mem=%08x", crc_file, crc_mem);
-        parallax_crash();
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
     }
 }
 
@@ -533,7 +549,7 @@ PARALLAX_ENCRYPT void detectFrida() {
 
     if (hasHookFrameworkMarker()) {
         DLOGD("found instrumentation/hook framework marker");
-        parallax_crash();
+        reportSecurityRisk(PARALLAX_SECURITY_HOOK_FRAMEWORK_BIT);
     }
 
     int frida_thread_count = find_in_threads_list(4,
@@ -543,14 +559,14 @@ PARALLAX_ENCRYPT void detectFrida() {
             gum_js_loop);
     if (frida_thread_count >= 2) {
         DLOGD("found instrumentation threads");
-        parallax_crash();
+        reportSecurityRisk(PARALLAX_SECURITY_HOOK_FRAMEWORK_BIT);
     }
 }
 
 PARALLAX_ENCRYPT void detectDebugger() {
     if (hasTracerPid()) {
         DLOGD("found tracer pid");
-        parallax_crash();
+        reportSecurityRisk(PARALLAX_SECURITY_TRACER_BIT);
     }
 }
 
