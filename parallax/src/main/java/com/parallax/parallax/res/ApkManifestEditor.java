@@ -13,20 +13,31 @@ import pxb.android.axml.AxmlParser;
  */
 public class ApkManifestEditor {
     /**
-     * Write app name to xml
+     * Write app name to xml and ensure the protection warning can fetch its HTTPS video.
      */
     public static void writeApplicationName(String inManifestFile, String outManifestFile, String newApplicationName){
         ModificationProperty property = new ModificationProperty();
         property.addApplicationAttribute(new AttributeItem(NodeValue.Application.NAME,newApplicationName));
+        property.addUsesPermission("android.permission.INTERNET");
 
         FileProcesser.processManifestFile(inManifestFile, outManifestFile, property);
 
     }
 
     /**
-     * Write appComponentFactory to xml
+     * Write appComponentFactory to xml. The APK bootstrap rewrites the Application first,
+     * so derive the matching randomized-shell protection factory from that name.
      */
     public static void writeAppComponentFactory(String inManifestFile, String outManifestFile, String newComponentFactory){
+        String applicationName = getApplicationName(inManifestFile);
+        if (applicationName != null && applicationName.endsWith(".ParallaxKoChummiDedo")) {
+            int lastDot = applicationName.lastIndexOf('.');
+            if (lastDot > 0) {
+                newComponentFactory = applicationName.substring(0, lastDot + 1)
+                        + "ParallaxProtectionFactory";
+            }
+        }
+
         ModificationProperty property = new ModificationProperty();
         property.addApplicationAttribute(new AttributeItem("appComponentFactory",newComponentFactory));
 
