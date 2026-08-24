@@ -52,7 +52,6 @@ public final class ParallaxKoChummiDedo extends Application
     public static native Object ra(String appName);
     public static native void clinit();
     public static native int securityStatus(Context context);
-    public static native int runtimeSecurityState();
     public static native void scheduleExit(int delayMs);
 
     static boolean isProtectionBlocked() {
@@ -243,7 +242,7 @@ public final class ParallaxKoChummiDedo extends Application
             return;
         }
         try {
-            int runtimeState = runtimeSecurityState();
+            int runtimeState = securityStatus(this);
             if (runtimeState != 0) {
                 securityReason |= runtimeState;
                 Activity activity = ParallaxProtectionFactory.peekActivity();
