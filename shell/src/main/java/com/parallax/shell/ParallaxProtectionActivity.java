@@ -58,9 +58,9 @@ public final class ParallaxProtectionActivity extends Activity
             return;
         }
         try {
-            // Re-launch an already-declared host component. Once the protection state is
-            // latched, ParallaxProtectionFactory substitutes this warning Activity before
-            // Android attempts to resolve the protected class from the locked DEX.
+            // Re-launch an already-declared host component. Once protection is latched,
+            // the component factory substitutes this warning Activity before the locked
+            // protected class is resolved.
             ComponentName component = activity.getComponentName();
             if (component == null) {
                 LAUNCH_REQUESTED.set(false);
@@ -68,9 +68,7 @@ public final class ParallaxProtectionActivity extends Activity
             }
             Intent intent = new Intent();
             intent.setComponent(component);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                    | Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
             activity.startActivity(intent);
         } catch (Throwable ignored) {
             LAUNCH_REQUESTED.set(false);
@@ -236,7 +234,7 @@ public final class ParallaxProtectionActivity extends Activity
             if (code < 200 || code >= 300) {
                 throw new IllegalStateException("video HTTP " + code);
             }
-            long declared = connection.getContentLengthLong();
+            long declared = connection.getContentLength();
             if (declared > MAX_VIDEO_BYTES) {
                 throw new IllegalStateException("video is too large");
             }
