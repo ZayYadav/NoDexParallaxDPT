@@ -4,7 +4,6 @@ import com.android.apksigner.ApkSignerTool;
 import com.parallax.parallax.config.Const;
 import com.parallax.parallax.config.ShellConfig;
 import com.parallax.parallax.res.ApkManifestEditor;
-import com.parallax.parallax.util.DexUtils;
 import com.parallax.parallax.util.FileUtils;
 import com.parallax.parallax.util.KeyUtils;
 import com.parallax.parallax.util.LogUtils;
@@ -175,37 +174,10 @@ public class Apk extends AndroidPackage {
     }
 
     /**
-     * Install only the executable bootstrap DEX. The protected app DEX archive is kept as
-     * a separate asset instead of being appended behind classes.dex. That makes the stub
-     * a real tiny DEX and lets the payload be compressed independently.
-     */
-    private static void installTinyShellDex(Apk apk, String packageDir) throws IOException {
-        File shellDexFile = new File(apk.getProxyDexPath());
-        File renameDexFile = new File(apk.getRenameDexPath());
-        File sourceDex = shellDexFile;
-        ShellConfig shellConfig = ShellConfig.getInstance();
-
-        boolean needRename = !org.apache.commons.lang3.StringUtils.isBlank(shellConfig.getShellPackageName())
-                && !Const.DEFAULT_SHELL_PACKAGE_NAME.equals(shellConfig.getShellPackageName());
-        if (needRename) {
-            DexUtils.renamePackageName(shellDexFile, renameDexFile, shellConfig.getSlashShellPackageName());
-            sourceDex = renameDexFile;
-        }
-
-        File targetDex = new File(apk.getDexDir(packageDir), "classes.dex");
-        Files.copy(sourceDex.toPath(), targetDex.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        LogUtils.info("Tiny shell DEX installed: %d bytes", targetDex.length());
-
-        if (renameDexFile.exists()) {
-            renameDexFile.delete();
-        }
-    }
-
-    /**
-     * The hollowed DEX files are already stored in a private ZIP. Re-encode those entries
-     * with BEST_COMPRESSION, then append the four-byte ZIP length trailer expected by the
-     * native loader. The outer APK stores this private asset verbatim, so compression is
-     * paid only once and the public classes.dex remains tiny.
+     * Re-encode the hollowed protected DEX archive with BEST_COMPRESSION before it is
+     * appended behind the one-class bootstrap DEX. combineDexZipWithShellDex() adds the
+     * single length trailer consumed by the native loader, so this intermediate payload
+     * intentionally contains only the ZIP bytes.
      */
     private static void compactDexPayload(Apk apk, String packageDir) throws IOException {
         File payload = new File(apk.getOutAssetsDir(packageDir), Const.KEY_DEXES_STORE_NAME);
@@ -236,18 +208,15 @@ public class Apk extends AndroidPackage {
             }
         }
 
-        long zipLength = compact.length();
-        if (zipLength <= 0 || zipLength > Integer.MAX_VALUE) {
+        long compactSize = compact.length();
+        if (compactSize <= 0 || compactSize > Integer.MAX_VALUE) {
             compact.delete();
-            throw new IOException("Invalid protected DEX payload size: " + zipLength);
-        }
-        try (FileOutputStream trailer = new FileOutputStream(compact, true)) {
-            trailer.write(FileUtils.intToByte((int) zipLength));
+            throw new IOException("Invalid protected DEX payload size: " + compactSize);
         }
 
         long oldSize = payload.length();
         Files.move(compact.toPath(), payload.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        LogUtils.info("DEX payload compacted: %d -> %d bytes", oldSize, payload.length());
+        LogUtils.info("DEX payload compacted before append: %d -> %d bytes", oldSize, payload.length());
     }
 
     /**
@@ -360,7 +329,7 @@ public class Apk extends AndroidPackage {
             apk.compressDexFiles(apkMainProcessPath);
             compactDexPayload(apk, apkMainProcessPath);
             apk.deleteAllDexFiles(apkMainProcessPath);
-            installTinyShellDex(apk, apkMainProcessPath);
+            apk.combineDexZipWithShellDex(apkMainProcessPath);
             apk.addKeepDexes(apkMainProcessPath);
             FileUtils.deleteRecurse(apk.getKeepDexTempDir(apkMainProcessPath));
 
