@@ -66,6 +66,14 @@ public final class ParallaxKoChummiDedo extends Application
         return realComponentFactoryName;
     }
 
+    private static String text(int key, int... data) {
+        char[] out = new char[data.length];
+        for (int i = 0; i < data.length; i++) {
+            out[i] = (char) (data[i] ^ key);
+        }
+        return new String(out);
+    }
+
     private static int nextState(int realState, int decoyState) {
         int value = flowNoise;
         flowNoise = Integer.rotateLeft(value ^ 0x9E3779B9, 7) + 0x7F4A7C15;
@@ -186,13 +194,25 @@ public final class ParallaxKoChummiDedo extends Application
 
     static String protectionMessage() {
         int reason = securityReason;
-        if ((reason & SECURITY_PAYLOAD_TAMPER) != 0) return "Protected code integrity verification failed. Protected DEX remains locked.";
-        if ((reason & SECURITY_ROOT) != 0) return "Rooted or modified device detected. Protected DEX remains locked.";
-        if ((reason & SECURITY_HOOK_FRAMEWORK) != 0) return "Hook or instrumentation framework detected. Protected DEX remains locked.";
-        if ((reason & SECURITY_TRACER) != 0) return "Debugger or tracer detected. Protected DEX remains locked.";
-        if ((reason & SECURITY_DEBUGGABLE) != 0) return "Debuggable application state detected. Protected DEX remains locked.";
-        if ((reason & SECURITY_RUNTIME_TAMPER) != 0) return "Runtime integrity changed after launch. Protected session is blocked.";
-        return "Application security policy failed. Protected code remains locked.";
+        if ((reason & SECURITY_PAYLOAD_TAMPER) != 0) {
+            return text(41,122,76,74,92,91,64,93,80,9,64,71,93,76,78,91,64,93,80,9,74,65,76,74,66,9,79,72,64,69,76,77,7,9,125,65,64,90,9,90,76,90,90,64,70,71,9,64,90,9,75,69,70,74,66,76,77,7);
+        }
+        if ((reason & SECURITY_ROOT) != 0) {
+            return text(42,120,69,69,94,79,78,10,69,88,10,71,69,78,67,76,67,79,78,10,78,79,92,67,73,79,10,78,79,94,79,73,94,79,78,4,10,107,73,73,79,89,89,10,66,75,89,10,72,79,79,68,10,72,70,69,73,65,79,78,4);
+        }
+        if ((reason & SECURITY_HOOK_FRAMEWORK) != 0) {
+            return text(43,98,69,88,95,89,94,70,78,69,95,74,95,66,68,69,11,77,89,74,70,78,92,68,89,64,11,79,78,95,78,72,95,78,79,5,11,106,72,72,78,88,88,11,67,74,88,11,73,78,78,69,11,73,71,68,72,64,78,79,5);
+        }
+        if ((reason & SECURITY_TRACER) != 0) {
+            return text(44,104,73,78,89,75,75,73,94,12,67,94,12,88,94,77,79,73,94,12,72,73,88,73,79,88,73,72,2,12,109,79,79,73,95,95,12,68,77,95,12,78,73,73,66,12,78,64,67,79,71,73,72,2);
+        }
+        if ((reason & SECURITY_DEBUGGABLE) != 0) {
+            return text(45,105,72,79,88,74,74,76,79,65,72,13,76,93,93,65,68,78,76,89,68,66,67,13,94,89,76,89,72,13,73,72,89,72,78,89,72,73,3,13,108,78,78,72,94,94,13,69,76,94,13,79,72,72,67,13,79,65,66,78,70,72,73,3);
+        }
+        if ((reason & SECURITY_RUNTIME_TAMPER) != 0) {
+            return text(46,124,91,64,90,71,67,75,14,71,64,90,75,73,92,71,90,87,14,77,70,79,64,73,75,74,14,79,72,90,75,92,14,66,79,91,64,77,70,0,14,122,70,71,93,14,93,75,93,93,71,65,64,14,71,93,14,76,66,65,77,69,75,74,0);
+        }
+        return text(47,110,95,95,67,70,76,78,91,70,64,65,15,92,74,76,90,93,70,91,86,15,95,64,67,70,76,86,15,73,78,70,67,74,75,1,15,110,76,76,74,92,92,15,71,78,92,15,77,74,74,65,15,77,67,64,76,68,74,75,1);
     }
 
     private void startProtectionPolling() {
