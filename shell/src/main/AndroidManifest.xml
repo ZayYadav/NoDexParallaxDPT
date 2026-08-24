@@ -2,8 +2,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.parallax.parallax">
 
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name="com.parallax.shell.ParallaxKoChummiDedo"
+        android:appComponentFactory="com.parallax.shell.ParallaxProtectionFactory"
         android:allowBackup="false"
         android:extractNativeLibs="true"
         android:hasCode="true"
