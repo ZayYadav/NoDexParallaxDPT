@@ -1,0 +1,7 @@
+{
+  global:
+    JNI_OnLoad;
+    PARALLAX_UNKNOWN_DATA;
+  local:
+    *;
+};
