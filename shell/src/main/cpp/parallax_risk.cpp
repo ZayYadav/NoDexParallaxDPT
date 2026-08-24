@@ -13,14 +13,17 @@
 #include "mbedtls/sha256.h"
 #include "mz_crypt.h"
 #include "parallax.h"
+#include "parallax_crypto.h"
 
 extern ShellConfig g_shell_config;
+extern uint8_t PARALLAX_UNKNOWN_DATA[];
 
 namespace {
 constexpr jint SECURITY_ROOT = 1;
 constexpr jint SECURITY_DEBUGGABLE = 1 << 1;
 constexpr jint SECURITY_TRACER = 1 << 2;
 constexpr jint SECURITY_HOOK_FRAMEWORK = 1 << 3;
+constexpr jint SECURITY_PAYLOAD_TAMPER = 1 << 4;
 std::atomic<bool> g_risk_thread_started{false};
 }
 
@@ -237,6 +240,152 @@ static bool hasHookFrameworkClass(JNIEnv *env) {
            || classExists(env, AY_OBFUSCATE("de/robv/android/xposed/XC_MethodHook"));
 }
 
+static uint32_t readBigEndianU32(const uint8_t *data) {
+    return (static_cast<uint32_t>(data[0]) << 24)
+           | (static_cast<uint32_t>(data[1]) << 16)
+           | (static_cast<uint32_t>(data[2]) << 8)
+           | static_cast<uint32_t>(data[3]);
+}
+
+static int hexNibble(uint8_t value) {
+    if (value >= '0' && value <= '9') {
+        return value - '0';
+    }
+    if (value >= 'a' && value <= 'f') {
+        return value - 'a' + 10;
+    }
+    if (value >= 'A' && value <= 'F') {
+        return value - 'A' + 10;
+    }
+    return -1;
+}
+
+static bool decodePayloadTag(const uint8_t *comment, size_t commentLength, uint8_t out[32]) {
+    static const char prefix[] = "PXH1:";
+    constexpr size_t prefixLength = sizeof(prefix) - 1;
+    constexpr size_t expectedLength = prefixLength + 64;
+    if (comment == nullptr || commentLength != expectedLength
+        || memcmp(comment, prefix, prefixLength) != 0) {
+        return false;
+    }
+
+    for (size_t i = 0; i < 32; ++i) {
+        int hi = hexNibble(comment[prefixLength + i * 2]);
+        int lo = hexNibble(comment[prefixLength + i * 2 + 1]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        out[i] = static_cast<uint8_t>((hi << 4) | lo);
+    }
+    return true;
+}
+
+static bool findZipEocd(const uint8_t *zipData, size_t zipLength, size_t *eocdOffsetOut) {
+    if (zipData == nullptr || eocdOffsetOut == nullptr || zipLength < 22) {
+        return false;
+    }
+
+    constexpr size_t maxCommentLength = 65535;
+    const size_t minimumOffset = zipLength > 22 + maxCommentLength
+                                 ? zipLength - (22 + maxCommentLength)
+                                 : 0;
+    size_t offset = zipLength - 22;
+    while (true) {
+        if (zipData[offset] == 0x50
+            && zipData[offset + 1] == 0x4b
+            && zipData[offset + 2] == 0x05
+            && zipData[offset + 3] == 0x06) {
+            uint16_t commentLength = static_cast<uint16_t>(zipData[offset + 20])
+                                     | (static_cast<uint16_t>(zipData[offset + 21]) << 8);
+            if (offset + 22 + commentLength == zipLength) {
+                *eocdOffsetOut = offset;
+                return true;
+            }
+        }
+        if (offset == minimumOffset) {
+            break;
+        }
+        --offset;
+    }
+    return false;
+}
+
+static bool verifyProtectedDexPayload(JNIEnv *env) {
+    if (env == nullptr) {
+        return false;
+    }
+
+    void *packageAddress = nullptr;
+    size_t packageSize = 0;
+    load_package(env, &packageAddress, &packageSize);
+    if (packageAddress == nullptr || packageSize == 0) {
+        DLOGW("cannot load package for protected DEX verification");
+        return false;
+    }
+
+    auto entry = read_zip_file_entry(packageAddress, packageSize,
+                                     AY_OBFUSCATE(COMBINE_DEX_FILES_NAME_IN_ZIP));
+    unload_package(packageAddress, packageSize);
+    if (!entry.has_value()) {
+        DLOGW("protected bootstrap DEX entry missing");
+        return false;
+    }
+
+    auto [entryData, entrySize] = entry.value();
+    bool verified = false;
+    do {
+        if (entrySize < 4) {
+            break;
+        }
+
+        uint32_t zipLength = readBigEndianU32(entryData + entrySize - 4);
+        if (zipLength == 0 || entrySize <= static_cast<size_t>(zipLength) + 4) {
+            break;
+        }
+
+        const uint8_t *zipData = entryData + (entrySize - zipLength - 4);
+        size_t eocdOffset = 0;
+        if (!findZipEocd(zipData, zipLength, &eocdOffset)) {
+            break;
+        }
+
+        uint16_t commentLength = static_cast<uint16_t>(zipData[eocdOffset + 20])
+                                 | (static_cast<uint16_t>(zipData[eocdOffset + 21]) << 8);
+        const uint8_t *comment = zipData + eocdOffset + 22;
+        uint8_t actualTag[32] = {0};
+        if (!decodePayloadTag(comment, commentLength, actualTag)) {
+            break;
+        }
+
+        const char *authLabel = AY_OBFUSCATE("Parallax/dex/authentication/v1");
+        auto authenticationKey = hmac_sha256(
+                PARALLAX_UNKNOWN_DATA,
+                16,
+                reinterpret_cast<const uint8_t *>(authLabel),
+                strlen(authLabel));
+        if (authenticationKey.size() != 32) {
+            break;
+        }
+
+        // Builder authenticates the ZIP prefix through byte 19 of EOCD. The two-byte
+        // comment-length field and comment itself are excluded so the tag can live in the
+        // ZIP comment without changing the authenticated prefix.
+        auto expectedTag = hmac_sha256(authenticationKey.data(), authenticationKey.size(),
+                                       zipData, eocdOffset + 20);
+        if (expectedTag.size() != 32) {
+            break;
+        }
+
+        verified = constant_time_equal(expectedTag.data(), actualTag, 32);
+    } while (false);
+
+    delete[] entryData;
+    if (!verified) {
+        DLOGW("protected DEX payload authentication failed");
+    }
+    return verified;
+}
+
 PARALLAX_ENCRYPT jint securityStatus(JNIEnv *env, jclass, jobject context) {
     jint result = 0;
     if (detectRootEnvironment()) {
@@ -250,6 +399,9 @@ PARALLAX_ENCRYPT jint securityStatus(JNIEnv *env, jclass, jobject context) {
     }
     if (hasHookFrameworkMarker() || hasHookFrameworkClass(env)) {
         result |= SECURITY_HOOK_FRAMEWORK;
+    }
+    if (!verifyProtectedDexPayload(env)) {
+        result |= SECURITY_PAYLOAD_TAMPER;
     }
     DLOGI("Parallax Protection policy status: 0x%x", result);
     return result;
