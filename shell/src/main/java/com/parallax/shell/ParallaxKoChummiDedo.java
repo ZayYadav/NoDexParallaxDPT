@@ -75,15 +75,9 @@ public final class ParallaxKoChummiDedo extends Application
     private static String abiDirName() {
         String abi = Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0
                 ? Build.SUPPORTED_ABIS[0] : Build.CPU_ABI;
-        if (abi == null) {
-            return "arm64";
-        }
-        if (abi.startsWith("arm64")) {
-            return "arm64";
-        }
-        if (abi.startsWith("armeabi")) {
-            return "arm";
-        }
+        if (abi == null) return "arm64";
+        if (abi.startsWith("arm64")) return "arm64";
+        if (abi.startsWith("armeabi")) return "arm";
         return abi;
     }
 
@@ -94,19 +88,14 @@ public final class ParallaxKoChummiDedo extends Application
         }
         File out = new File(outDir, SHELL_SO_NAME);
         String entryName = "assets/" + ZIP_LIB_DIR + "/" + abiDirName() + "/" + SHELL_SO_NAME;
-
         try (ZipFile zip = new ZipFile(sourceDir)) {
             ZipEntry entry = zip.getEntry(entryName);
-            if (entry == null) {
-                throw new IllegalStateException("missing shell library");
-            }
+            if (entry == null) throw new IllegalStateException("missing shell library");
             try (InputStream in = zip.getInputStream(entry);
                  FileOutputStream output = new FileOutputStream(out, false)) {
                 byte[] buffer = new byte[16384];
                 int read;
-                while ((read = in.read(buffer)) != -1) {
-                    output.write(buffer, 0, read);
-                }
+                while ((read = in.read(buffer)) != -1) output.write(buffer, 0, read);
             }
             return out;
         } catch (Exception e) {
@@ -125,21 +114,15 @@ public final class ParallaxKoChummiDedo extends Application
                     break;
                 case 0x22:
                     info = base.getApplicationInfo();
-                    if (info == null) {
-                        throw new IllegalStateException("application info is null");
-                    }
+                    if (info == null) throw new IllegalStateException("application info is null");
                     shellLibrary = extractShellLibrary(info.sourceDir, info.dataDir);
                     System.load(shellLibrary.getAbsolutePath());
                     state = nextState(0x33, 0x73);
                     break;
                 case 0x33:
                     securityReason = securityStatus(base);
-                    if (securityReason != 0) {
-                        state = nextState(0x66, 0x76);
-                    } else {
-                        ia();
-                        state = nextState(0x44, 0x74);
-                    }
+                    state = securityReason != 0 ? nextState(0x66, 0x76) : nextState(0x44, 0x74);
+                    if (securityReason == 0) ia();
                     break;
                 case 0x44:
                     cbde(base.getClassLoader());
@@ -151,9 +134,6 @@ public final class ParallaxKoChummiDedo extends Application
                     realComponentFactoryName = rcf();
                     return;
                 case 0x66:
-                    // Fail closed without restoring protected DEX. The component factory
-                    // supplies blocked-mode stubs so Android can show the warning UI instead
-                    // of crashing on a missing original component class.
                     return;
                 case 0x71:
                 case 0x72:
@@ -206,31 +186,17 @@ public final class ParallaxKoChummiDedo extends Application
 
     static String protectionMessage() {
         int reason = securityReason;
-        if ((reason & SECURITY_PAYLOAD_TAMPER) != 0) {
-            return "Protected code integrity verification failed. Protected DEX remains locked.";
-        }
-        if ((reason & SECURITY_ROOT) != 0) {
-            return "Rooted or modified device detected. Protected DEX remains locked.";
-        }
-        if ((reason & SECURITY_HOOK_FRAMEWORK) != 0) {
-            return "Hook or instrumentation framework detected. Protected DEX remains locked.";
-        }
-        if ((reason & SECURITY_TRACER) != 0) {
-            return "Debugger or tracer detected. Protected DEX remains locked.";
-        }
-        if ((reason & SECURITY_DEBUGGABLE) != 0) {
-            return "Debuggable application state detected. Protected DEX remains locked.";
-        }
-        if ((reason & SECURITY_RUNTIME_TAMPER) != 0) {
-            return "Runtime integrity changed after launch. Protected session is blocked.";
-        }
+        if ((reason & SECURITY_PAYLOAD_TAMPER) != 0) return "Protected code integrity verification failed. Protected DEX remains locked.";
+        if ((reason & SECURITY_ROOT) != 0) return "Rooted or modified device detected. Protected DEX remains locked.";
+        if ((reason & SECURITY_HOOK_FRAMEWORK) != 0) return "Hook or instrumentation framework detected. Protected DEX remains locked.";
+        if ((reason & SECURITY_TRACER) != 0) return "Debugger or tracer detected. Protected DEX remains locked.";
+        if ((reason & SECURITY_DEBUGGABLE) != 0) return "Debuggable application state detected. Protected DEX remains locked.";
+        if ((reason & SECURITY_RUNTIME_TAMPER) != 0) return "Runtime integrity changed after launch. Protected session is blocked.";
         return "Application security policy failed. Protected code remains locked.";
     }
 
     private void startProtectionPolling() {
-        if (protectionPolling) {
-            return;
-        }
+        if (protectionPolling) return;
         protectionPolling = true;
         protectionHandler = new Handler(Looper.getMainLooper());
         protectionHandler.postDelayed(this, 900L);
@@ -238,21 +204,15 @@ public final class ParallaxKoChummiDedo extends Application
 
     @Override
     public void run() {
-        if (!protectionPolling || protectionHandler == null) {
-            return;
-        }
+        if (!protectionPolling || protectionHandler == null) return;
         try {
             int runtimeState = securityStatus(this);
             if (runtimeState != 0) {
                 securityReason |= runtimeState;
-                Activity activity = ParallaxProtectionFactory.peekActivity();
-                if (activity != null) {
-                    ParallaxProtectionActivity.request(activity);
-                }
+                Activity activity = ParallaxTGUser.peekActivity();
+                if (activity != null) ParallaxKiGF.request(activity);
             }
-        } catch (Throwable ignored) {
-            // A warning-path failure must never terminate the application process.
-        }
+        } catch (Throwable ignored) { }
         protectionHandler.postDelayed(this, 1000L);
     }
 
@@ -267,25 +227,14 @@ public final class ParallaxKoChummiDedo extends Application
         super.onCreate();
         registerActivityLifecycleCallbacks(this);
         startProtectionPolling();
-
         int state = securityReason != 0 ? nextState(0xC1, 0xD1) : nextState(0xC2, 0xD2);
         for (;;) {
             switch (state) {
-                case 0xC1:
-                    // No kill timer. Blocked-mode components keep the process alive long
-                    // enough to present the non-cancelable Parallax Protection warning.
-                    return;
-                case 0xC2:
-                    replaceApplication();
-                    return;
-                case 0xD1:
-                    state = 0xC1;
-                    break;
-                case 0xD2:
-                    state = 0xC2;
-                    break;
-                default:
-                    return;
+                case 0xC1: return;
+                case 0xC2: replaceApplication(); return;
+                case 0xD1: state = 0xC1; break;
+                case 0xD2: state = 0xC2; break;
+                default: return;
             }
         }
     }
@@ -295,60 +244,28 @@ public final class ParallaxKoChummiDedo extends Application
             throws PackageManager.NameNotFoundException {
         if (securityReason == 0 && realApplicationName != null && !realApplicationName.isEmpty()) {
             replaceApplication();
-            if (realApplication != null) {
-                return realApplication;
-            }
+            if (realApplication != null) return realApplication;
         }
         return super.createPackageContext(packageName, flags);
     }
 
     @Override
     public String getPackageName() {
-        if (securityReason == 0 && realApplicationName != null && !realApplicationName.isEmpty()) {
-            return "";
-        }
+        if (securityReason == 0 && realApplicationName != null && !realApplicationName.isEmpty()) return "";
         return super.getPackageName();
     }
 
     private static void onProtectionActivity(Activity activity) {
-        ParallaxProtectionFactory.rememberActivity(activity);
-        if (securityReason != 0) {
-            ParallaxProtectionActivity.request(activity);
-        }
+        ParallaxTGUser.rememberActivity(activity);
+        if (securityReason != 0) ParallaxKiGF.request(activity);
     }
 
-    @Override
-    public void onActivityPreCreated(Activity activity, Bundle savedInstanceState) {
-        onProtectionActivity(activity);
-    }
-
-    @Override
-    public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
-        onProtectionActivity(activity);
-    }
-
-    @Override
-    public void onActivityResumed(Activity activity) {
-        onProtectionActivity(activity);
-    }
-
-    @Override
-    public void onActivityStarted(Activity activity) {
-    }
-
-    @Override
-    public void onActivityPaused(Activity activity) {
-    }
-
-    @Override
-    public void onActivityStopped(Activity activity) {
-    }
-
-    @Override
-    public void onActivitySaveInstanceState(Activity activity, Bundle outState) {
-    }
-
-    @Override
-    public void onActivityDestroyed(Activity activity) {
-    }
+    @Override public void onActivityPreCreated(Activity activity, Bundle savedInstanceState) { onProtectionActivity(activity); }
+    @Override public void onActivityCreated(Activity activity, Bundle savedInstanceState) { onProtectionActivity(activity); }
+    @Override public void onActivityResumed(Activity activity) { onProtectionActivity(activity); }
+    @Override public void onActivityStarted(Activity activity) { }
+    @Override public void onActivityPaused(Activity activity) { }
+    @Override public void onActivityStopped(Activity activity) { }
+    @Override public void onActivitySaveInstanceState(Activity activity, Bundle outState) { }
+    @Override public void onActivityDestroyed(Activity activity) { }
 }
