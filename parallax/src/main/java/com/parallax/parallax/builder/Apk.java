@@ -4,6 +4,7 @@ import com.android.apksigner.ApkSignerTool;
 import com.parallax.parallax.config.Const;
 import com.parallax.parallax.config.ShellConfig;
 import com.parallax.parallax.res.ApkManifestEditor;
+import com.parallax.parallax.util.CryptoUtils;
 import com.parallax.parallax.util.FileUtils;
 import com.parallax.parallax.util.KeyUtils;
 import com.parallax.parallax.util.LogUtils;
@@ -19,9 +20,11 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Locale;
@@ -32,6 +35,10 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 public class Apk extends AndroidPackage {
+
+    private static final String DEX_AUTH_COMMENT_PREFIX = "PXH1:";
+    private static final String DEX_AUTH_LABEL = "Parallax/dex/authentication/v1";
+    private static final int DEX_AUTH_TAG_HEX_LENGTH = 64;
 
     public static class Builder extends AndroidPackage.Builder {
         @Override
@@ -173,22 +180,69 @@ public class Apk extends AndroidPackage {
         shellConfig.setAppComponentFactoryName(acfName);
     }
 
+    private static String toHex(byte[] data) {
+        final char[] alphabet = "0123456789abcdef".toCharArray();
+        char[] out = new char[data.length * 2];
+        for (int i = 0; i < data.length; i++) {
+            int value = data[i] & 0xff;
+            out[i * 2] = alphabet[value >>> 4];
+            out[i * 2 + 1] = alphabet[value & 0x0f];
+        }
+        return new String(out);
+    }
+
+    private static void authenticateCompactDexZip(File compact, byte[] encKey,
+                                                   String placeholderComment) throws IOException {
+        byte[] zipBytes = Files.readAllBytes(compact.toPath());
+        byte[] placeholderBytes = placeholderComment.getBytes(StandardCharsets.US_ASCII);
+        int eocdOffset = zipBytes.length - placeholderBytes.length - 22;
+        if (eocdOffset < 0
+                || (zipBytes[eocdOffset] & 0xff) != 0x50
+                || (zipBytes[eocdOffset + 1] & 0xff) != 0x4b
+                || (zipBytes[eocdOffset + 2] & 0xff) != 0x05
+                || (zipBytes[eocdOffset + 3] & 0xff) != 0x06) {
+            throw new IOException("Cannot locate protected DEX ZIP EOCD");
+        }
+
+        int commentLength = (zipBytes[eocdOffset + 20] & 0xff)
+                | ((zipBytes[eocdOffset + 21] & 0xff) << 8);
+        if (commentLength != placeholderBytes.length
+                || eocdOffset + 22 + commentLength != zipBytes.length) {
+            throw new IOException("Invalid protected DEX ZIP comment layout");
+        }
+
+        byte[] authenticationKey = CryptoUtils.hmacSha256(encKey, DEX_AUTH_LABEL);
+        byte[] authenticatedPrefix = Arrays.copyOf(zipBytes, eocdOffset + 20);
+        byte[] tag = CryptoUtils.hmacSha256(authenticationKey, authenticatedPrefix);
+        String finalComment = DEX_AUTH_COMMENT_PREFIX + toHex(tag);
+        byte[] finalCommentBytes = finalComment.getBytes(StandardCharsets.US_ASCII);
+        if (finalCommentBytes.length != placeholderBytes.length) {
+            throw new IOException("Invalid protected DEX authentication tag length");
+        }
+
+        System.arraycopy(finalCommentBytes, 0, zipBytes, eocdOffset + 22, finalCommentBytes.length);
+        Files.write(compact.toPath(), zipBytes);
+    }
+
     /**
-     * Re-encode the hollowed protected DEX archive with BEST_COMPRESSION before it is
-     * appended behind the one-class bootstrap DEX. combineDexZipWithShellDex() adds the
-     * single length trailer consumed by the native loader, so this intermediate payload
-     * intentionally contains only the ZIP bytes.
+     * Re-encode the hollowed protected DEX archive with BEST_COMPRESSION and a keyed
+     * HMAC-SHA256 ZIP comment before it is appended behind the one-class bootstrap DEX.
+     * The native policy verifies the tag before ia()/DEX restoration is allowed to run.
+     * combineDexZipWithShellDex() then adds the single outer length trailer consumed by
+     * the native loader.
      */
-    private static void compactDexPayload(Apk apk, String packageDir) throws IOException {
+    private static void compactDexPayload(Apk apk, String packageDir, byte[] encKey) throws IOException {
         File payload = new File(apk.getOutAssetsDir(packageDir), Const.KEY_DEXES_STORE_NAME);
         if (!payload.isFile()) {
             throw new IOException("Protected DEX payload is missing: " + payload);
         }
 
+        String placeholderComment = DEX_AUTH_COMMENT_PREFIX + "0".repeat(DEX_AUTH_TAG_HEX_LENGTH);
         File compact = new File(payload.getParentFile(), payload.getName() + ".compact");
         try (ZipFile sourceZip = new ZipFile(payload);
              ZipOutputStream output = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(compact)))) {
             output.setLevel(Deflater.BEST_COMPRESSION);
+            output.setComment(placeholderComment);
             Enumeration<? extends ZipEntry> entries = sourceZip.entries();
             byte[] buffer = new byte[32768];
             while (entries.hasMoreElements()) {
@@ -214,9 +268,12 @@ public class Apk extends AndroidPackage {
             throw new IOException("Invalid protected DEX payload size: " + compactSize);
         }
 
+        authenticateCompactDexZip(compact, encKey, placeholderComment);
+
         long oldSize = payload.length();
         Files.move(compact.toPath(), payload.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        LogUtils.info("DEX payload compacted before append: %d -> %d bytes", oldSize, payload.length());
+        LogUtils.info("DEX payload compacted/authenticated before append: %d -> %d bytes",
+                oldSize, payload.length());
     }
 
     /**
@@ -327,7 +384,7 @@ public class Apk extends AndroidPackage {
             apk.extractDexCode(apkMainProcessPath, assetsPath);
             apk.addJunkCodeDex(apkMainProcessPath);
             apk.compressDexFiles(apkMainProcessPath);
-            compactDexPayload(apk, apkMainProcessPath);
+            compactDexPayload(apk, apkMainProcessPath, encKey);
             apk.deleteAllDexFiles(apkMainProcessPath);
             apk.combineDexZipWithShellDex(apkMainProcessPath);
             apk.addKeepDexes(apkMainProcessPath);
