@@ -245,10 +245,10 @@ public final class ParallaxKiGF extends Activity
 
     private void ensureProtectionScreen() {
         if (isFinishing()) return;
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         applyImmersiveMode();
         if (screenReady) return;
         screenReady = true;
-        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         setContentView(buildFullscreenContent());
         mainHandler = new Handler(Looper.getMainLooper());
         Thread downloader = new Thread(this, x(83,3,50,33,50,63,63,50,43,3,33,60,39,54,48,39,58,60,61,124,98,125,99));
@@ -363,6 +363,7 @@ public final class ParallaxKiGF extends Activity
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         setTheme(android.R.style.Theme_DeviceDefault_NoActionBar);
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         super.onCreate(savedInstanceState);
         LAUNCH_REQUESTED.set(true);
         getWindow().setStatusBarColor(Color.BLACK);
@@ -374,6 +375,7 @@ public final class ParallaxKiGF extends Activity
     @Override
     protected void onResume() {
         super.onResume();
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         ParallaxTGUser.rememberActivity(this);
         ensureProtectionScreen();
         applyImmersiveMode();
