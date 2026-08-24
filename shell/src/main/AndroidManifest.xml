@@ -8,7 +8,8 @@
         android:debuggable="false"
         android:extractNativeLibs="true"
         android:hasCode="true"
-        android:profileableByShell="false"
         android:supportsRtl="true"
-        android:testOnly="false" />
+        android:testOnly="false">
+        <profileable android:shell="false" />
+    </application>
 </manifest>
