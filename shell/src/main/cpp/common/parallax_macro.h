@@ -29,7 +29,10 @@ inline int get_cache_page_size() {
 
 #define SHELL_CONFIG_IN_ZIP "assets/ItsParallaxBaby"
 #define CODE_ITEM_NAME_IN_ZIP "assets/Parallax.love"
-#define COMBINE_DEX_FILES_NAME_IN_ZIP "classes.dex"
+// The protected DEX archive now lives outside the public bootstrap DEX. It keeps the
+// historical four-byte length trailer, so the existing native extraction parser stays
+// compatible while classes.dex remains a true tiny single-class stub.
+#define COMBINE_DEX_FILES_NAME_IN_ZIP "assets/i11111i111.zip"
 #define JUNK_CLASS_FULL_NAME "com/parallax/parallax/junkcode/JunkClass"
 
 #define PARALLAX_PAGE_MASK (~((get_cache_page_size()) - 1))
