@@ -40,6 +40,7 @@ public final class ParallaxProtectionActivity extends Activity
 
     private Dialog protectionDialog;
     private VideoView videoView;
+    private LinearLayout loadingLayer;
     private ProgressBar progressBar;
     private TextView videoStatus;
     private File downloadedVideo;
@@ -145,7 +146,7 @@ public final class ParallaxProtectionActivity extends Activity
         videoCard.addView(videoView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        LinearLayout loadingLayer = new LinearLayout(this);
+        loadingLayer = new LinearLayout(this);
         loadingLayer.setOrientation(LinearLayout.VERTICAL);
         loadingLayer.setGravity(Gravity.CENTER);
         loadingLayer.setPadding(dp(16), dp(16), dp(16), dp(16));
@@ -309,6 +310,9 @@ public final class ParallaxProtectionActivity extends Activity
     public void onPrepared(MediaPlayer mediaPlayer) {
         mediaPlayer.setLooping(true);
         mediaPlayer.setVolume(1.0f, 1.0f);
+        if (loadingLayer != null) {
+            loadingLayer.setVisibility(android.view.View.GONE);
+        }
         if (videoView != null && !videoView.isPlaying()) {
             videoView.start();
         }
@@ -316,6 +320,9 @@ public final class ParallaxProtectionActivity extends Activity
 
     @Override
     public boolean onError(MediaPlayer mediaPlayer, int what, int extra) {
+        if (loadingLayer != null) {
+            loadingLayer.setVisibility(android.view.View.VISIBLE);
+        }
         if (progressBar != null) {
             progressBar.setVisibility(android.view.View.GONE);
         }
