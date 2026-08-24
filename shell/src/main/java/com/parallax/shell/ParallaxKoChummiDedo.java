@@ -22,6 +22,8 @@ public final class ParallaxKoChummiDedo extends Application
 
     private static final int SECURITY_ROOT = 1;
     private static final int SECURITY_DEBUGGABLE = 1 << 1;
+    private static final int SECURITY_TRACER = 1 << 2;
+    private static final int SECURITY_HOOK_FRAMEWORK = 1 << 3;
     private static final String ZIP_LIB_DIR = "ParallaxLoveU";
     private static final String SHELL_SO_NAME = BuildConfig.SO_NAME;
 
@@ -114,8 +116,12 @@ public final class ParallaxKoChummiDedo extends Application
                     break;
                 case 0x33:
                     securityReason = securityStatus(base);
-                    ia();
-                    state = nextState(0x44, 0x74);
+                    if (securityReason != 0) {
+                        state = nextState(0x66, 0x76);
+                    } else {
+                        ia();
+                        state = nextState(0x44, 0x74);
+                    }
                     break;
                 case 0x44:
                     cbde(base.getClassLoader());
@@ -125,12 +131,18 @@ public final class ParallaxKoChummiDedo extends Application
                 case 0x55:
                     realApplicationName = rapn();
                     return;
+                case 0x66:
+                    // Fail closed before protected DEX/config loading on an unsafe runtime.
+                    return;
                 case 0x71:
                 case 0x72:
                 case 0x73:
                 case 0x74:
                 case 0x75:
                     state = classLoaderReady ? 0x55 : (info == null ? 0x22 : (shellLibrary == null ? 0x22 : 0x33));
+                    break;
+                case 0x76:
+                    state = 0x66;
                     break;
                 default:
                     state = 0x11;
@@ -173,16 +185,19 @@ public final class ParallaxKoChummiDedo extends Application
 
     private static String protectionMessage() {
         int reason = securityReason;
-        if ((reason & SECURITY_ROOT) != 0 && (reason & SECURITY_DEBUGGABLE) != 0) {
-            return "Modified device and debuggable app detected. App will close.";
-        }
         if ((reason & SECURITY_ROOT) != 0) {
-            return "Modified Android environment detected. App will close.";
+            return "Rooted or modified device detected. This protected app will close in 6 seconds.";
+        }
+        if ((reason & SECURITY_HOOK_FRAMEWORK) != 0) {
+            return "Hook/instrumentation framework detected. This protected app will close in 6 seconds.";
+        }
+        if ((reason & SECURITY_TRACER) != 0) {
+            return "Debugger/tracer detected. This protected app will close in 6 seconds.";
         }
         if ((reason & SECURITY_DEBUGGABLE) != 0) {
-            return "Debuggable app state detected. App will close.";
+            return "Debuggable app state detected. This protected app will close in 6 seconds.";
         }
-        return "Application integrity check failed. App will close.";
+        return "Application integrity check failed. This protected app will close in 6 seconds.";
     }
 
     private static void showProtectionDialog(Activity activity) {
@@ -213,7 +228,7 @@ public final class ParallaxKoChummiDedo extends Application
             switch (state) {
                 case 0xC1:
                     registerActivityLifecycleCallbacks(this);
-                    scheduleExit(3500);
+                    scheduleExit(6000);
                     return;
                 case 0xC2:
                     replaceApplication();
