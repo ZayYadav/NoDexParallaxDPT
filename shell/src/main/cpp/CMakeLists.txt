@@ -10,6 +10,7 @@ set(PARALLAX_NATIVE_SOURCE
         parallax_risk.cpp
         parallax_crypto.cpp
         parallax_hardening.cpp
+        parallax_runtime_guard.cpp
         parallax_policy.cpp
         rc4/rc4.c
         common/parallax_string.c
