@@ -6,132 +6,90 @@ import android.app.Application;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
-import android.graphics.Color;
-import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
-import android.view.Window;
-import android.view.WindowManager;
-import android.widget.TextView;
 
 import com.parallax.parallax.BuildConfig;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
-import java.lang.reflect.Method;
-import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-/**
- * Single-class shell bootstrap. Android lifecycle entry, native bridge, protection UI
- * and the tiny library extractor deliberately live in this one class so release R8
- * emits exactly one shell class definition.
- */
 public final class ParallaxKoChummiDedo extends Application
         implements Application.ActivityLifecycleCallbacks {
-    private static final String ZIP_LIB_DIR = "ParallaxLoveU";
-    private static final String LIB_DIR = "libs";
-    private static final String SHELL_SO_NAME = BuildConfig.SO_NAME;
-    private static final String PROTECTION_TITLE = "Parallax Protection";
 
     private static final int SECURITY_ROOT = 1;
     private static final int SECURITY_DEBUGGABLE = 1 << 1;
+    private static final int SECURITY_TRACER = 1 << 2;
+    private static final int SECURITY_HOOK_FRAMEWORK = 1 << 3;
+    private static final int SECURITY_PAYLOAD_TAMPER = 1 << 4;
+    private static final String ZIP_LIB_DIR = "ParallaxLoveU";
+    private static final String SHELL_SO_NAME = BuildConfig.SO_NAME;
 
-    private boolean classLoaderReady;
-    private boolean needRealApplication = true;
-    private boolean protectionDialogShown;
-    private int securityReason;
-    private String realApplicationName = "";
-    private Application realApplication;
+    private static volatile int flowNoise = 0x6D2B79F5;
+    private static boolean classLoaderReady;
+    private static boolean needRealApplication = true;
+    private static boolean protectionDialogShown;
+    private static int securityReason;
+    private static String realApplicationName;
+    private static Application realApplication;
 
-    // Registered from JNI_OnLoad after the authenticated shell config is read.
-    public static native void craoc(String applicationClassName);
+    public static native void craoc(String appName);
     public static native void ia();
-    public static native String rcf();
-    public static native void cbde(ClassLoader targetClassLoader);
-    public static native void rde(ClassLoader classLoader, String elementName);
     public static native String gap();
     public static native String gdp();
-    public static native Object ra(String originApplicationClassName);
+    public static native String rcf();
     public static native String rapn();
+    public static native void cbde(ClassLoader classLoader);
+    public static native void rde(ClassLoader classLoader, String elementName);
+    public static native Object ra(String appName);
     public static native void clinit();
     public static native int securityStatus(Context context);
     public static native void scheduleExit(int delayMs);
 
-    private static String abiDirName() {
-        try {
-            Class<?> clazz = Class.forName("dalvik.system.VMRuntime");
-            Method getRuntime = clazz.getDeclaredMethod("getRuntime");
-            Object runtime = getRuntime.invoke(null);
-            Method vmInstructionSet = clazz.getDeclaredMethod("vmInstructionSet");
-            Object value = vmInstructionSet.invoke(runtime);
-            if (value instanceof String) {
-                return (String) value;
-            }
-        } catch (Throwable ignored) {
-        }
-
-        String abi = Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0
-                ? Build.SUPPORTED_ABIS[0] : "arm64-v8a";
-        if (abi.startsWith("arm64")) return "arm64";
-        if (abi.startsWith("armeabi") || abi.startsWith("arm")) return "arm";
-        if (abi.equals("x86_64")) return "x86_64";
-        if (abi.startsWith("x86")) return "x86";
-        return "arm64";
+    private static int nextState(int realState, int decoyState) {
+        int value = flowNoise;
+        flowNoise = Integer.rotateLeft(value ^ 0x9E3779B9, 7) + 0x7F4A7C15;
+        return ((value * (value + 1)) & 1) == 0 ? realState : decoyState;
     }
 
-    private static long crc32(File file) {
-        CRC32 crc = new CRC32();
-        byte[] buffer = new byte[8192];
-        try (InputStream in = new FileInputStream(file)) {
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                crc.update(buffer, 0, read);
-            }
-            return crc.getValue();
-        } catch (Throwable ignored) {
-            return -1L;
+    private static String abiDirName() {
+        String abi = Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0
+                ? Build.SUPPORTED_ABIS[0] : Build.CPU_ABI;
+        if (abi == null) {
+            return "arm64";
         }
+        if (abi.startsWith("arm64")) {
+            return "arm64";
+        }
+        if (abi.startsWith("armeabi")) {
+            return "arm";
+        }
+        return abi;
     }
 
     private static File extractShellLibrary(String sourceDir, String dataDir) {
-        String abi = abiDirName();
-        File outDir = new File(new File(dataDir, LIB_DIR), abi);
-        if (!outDir.isDirectory() && !outDir.mkdirs() && !outDir.isDirectory()) {
-            throw new IllegalStateException("cannot create shell library directory");
+        File outDir = new File(dataDir, "files");
+        if (!outDir.exists() && !outDir.mkdirs()) {
+            throw new IllegalStateException("cannot create shell directory");
         }
-
         File out = new File(outDir, SHELL_SO_NAME);
-        String entryName = "assets/" + ZIP_LIB_DIR + "/" + abi + "/" + SHELL_SO_NAME;
+        String entryName = "assets/" + ZIP_LIB_DIR + "/" + abiDirName() + "/" + SHELL_SO_NAME;
 
         try (ZipFile zip = new ZipFile(sourceDir)) {
             ZipEntry entry = zip.getEntry(entryName);
             if (entry == null) {
-                throw new IllegalStateException("missing shell library for " + abi);
+                throw new IllegalStateException("missing shell library");
             }
-
-            long expectedCrc = entry.getCrc();
-            if (out.isFile() && expectedCrc >= 0 && crc32(out) == expectedCrc) {
-                return out;
-            }
-
-            byte[] buffer = new byte[8192];
             try (InputStream in = zip.getInputStream(entry);
                  FileOutputStream output = new FileOutputStream(out, false)) {
+                byte[] buffer = new byte[16384];
                 int read;
                 while ((read = in.read(buffer)) != -1) {
                     output.write(buffer, 0, read);
                 }
-                output.flush();
-            }
-
-            if (expectedCrc >= 0 && crc32(out) != expectedCrc) {
-                // Do not load a partially written or modified shell library.
-                out.delete();
-                throw new IllegalStateException("shell library checksum mismatch");
             }
             return out;
         } catch (Exception e) {
@@ -140,99 +98,124 @@ public final class ParallaxKoChummiDedo extends Application
     }
 
     private void prepare(Context base) {
-        if (!classLoaderReady) {
-            ApplicationInfo info = base.getApplicationInfo();
-            if (info == null) {
-                throw new IllegalStateException("application info is null");
+        int state = 0x11;
+        ApplicationInfo info = null;
+        File shellLibrary = null;
+        for (;;) {
+            switch (state) {
+                case 0x11:
+                    state = classLoaderReady ? nextState(0x55, 0x71) : nextState(0x22, 0x72);
+                    break;
+                case 0x22:
+                    info = base.getApplicationInfo();
+                    if (info == null) {
+                        throw new IllegalStateException("application info is null");
+                    }
+                    shellLibrary = extractShellLibrary(info.sourceDir, info.dataDir);
+                    System.load(shellLibrary.getAbsolutePath());
+                    state = nextState(0x33, 0x73);
+                    break;
+                case 0x33:
+                    securityReason = securityStatus(base);
+                    if (securityReason != 0) {
+                        state = nextState(0x66, 0x76);
+                    } else {
+                        ia();
+                        state = nextState(0x44, 0x74);
+                    }
+                    break;
+                case 0x44:
+                    cbde(base.getClassLoader());
+                    classLoaderReady = true;
+                    state = nextState(0x55, 0x75);
+                    break;
+                case 0x55:
+                    realApplicationName = rapn();
+                    return;
+                case 0x66:
+                    // Fail closed before protected DEX/config loading on an unsafe runtime.
+                    return;
+                case 0x71:
+                case 0x72:
+                case 0x73:
+                case 0x74:
+                case 0x75:
+                    state = classLoaderReady ? 0x55 : (info == null ? 0x22 : (shellLibrary == null ? 0x22 : 0x33));
+                    break;
+                case 0x76:
+                    state = 0x66;
+                    break;
+                default:
+                    state = 0x11;
+                    break;
             }
-
-            File shellLibrary = extractShellLibrary(info.sourceDir, info.dataDir);
-            System.load(shellLibrary.getAbsolutePath());
-
-            // Native policy is evaluated before the real Application is allowed to run.
-            securityReason = securityStatus(base);
-
-            // Restore the protected app's classes so Android can resolve its declared
-            // components. If blocked, the real Application itself is never replaced or run.
-            ia();
-            cbde(base.getClassLoader());
-            classLoaderReady = true;
         }
-        realApplicationName = rapn();
     }
 
     private void replaceApplication() {
-        if (securityReason != 0 || !needRealApplication
-                || realApplicationName == null || realApplicationName.isEmpty()) {
-            return;
-        }
-        Object app = ra(realApplicationName);
-        if (app instanceof Application) {
-            realApplication = (Application) app;
-            craoc(realApplicationName);
-            needRealApplication = false;
+        int state = 0x81;
+        Object app = null;
+        for (;;) {
+            switch (state) {
+                case 0x81:
+                    state = securityReason == 0 && needRealApplication
+                            && realApplicationName != null && !realApplicationName.isEmpty()
+                            ? nextState(0x92, 0xB1) : nextState(0xA3, 0xB2);
+                    break;
+                case 0x92:
+                    app = ra(realApplicationName);
+                    if (app instanceof Application) {
+                        realApplication = (Application) app;
+                        needRealApplication = false;
+                        craoc(realApplicationName);
+                    }
+                    state = nextState(0xA3, 0xB3);
+                    break;
+                case 0xA3:
+                    return;
+                case 0xB1:
+                case 0xB2:
+                case 0xB3:
+                    state = app instanceof Application ? 0xA3 : 0x92;
+                    break;
+                default:
+                    return;
+            }
         }
     }
 
-    private String protectionMessage() {
-        boolean rooted = (securityReason & SECURITY_ROOT) != 0;
-        boolean debuggable = (securityReason & SECURITY_DEBUGGABLE) != 0;
-        if (rooted && debuggable) {
-            return "Rooted/modified environment and a debuggable application state were detected. "
-                    + "For security, this app will close automatically.";
+    private static String protectionMessage() {
+        int reason = securityReason;
+        if ((reason & SECURITY_PAYLOAD_TAMPER) != 0) {
+            return "Protected code integrity verification failed. This protected app will close in 6 seconds.";
         }
-        if (rooted) {
-            return "A rooted or modified Android environment was detected. "
-                    + "For security, this protected app cannot run on this device and will close automatically.";
+        if ((reason & SECURITY_ROOT) != 0) {
+            return "Rooted or modified device detected. This protected app will close in 6 seconds.";
         }
-        if (debuggable) {
-            return "Application integrity policy failed because a debuggable build state was detected. "
-                    + "This app will close automatically.";
+        if ((reason & SECURITY_HOOK_FRAMEWORK) != 0) {
+            return "Hook/instrumentation framework detected. This protected app will close in 6 seconds.";
         }
-        return "Application integrity verification failed. This app will close automatically.";
+        if ((reason & SECURITY_TRACER) != 0) {
+            return "Debugger/tracer detected. This protected app will close in 6 seconds.";
+        }
+        if ((reason & SECURITY_DEBUGGABLE) != 0) {
+            return "Debuggable app state detected. This protected app will close in 6 seconds.";
+        }
+        return "Application integrity check failed. This protected app will close in 6 seconds.";
     }
 
-    private void showProtectionDialog(Activity activity) {
+    private static void showProtectionDialog(Activity activity) {
         if (securityReason == 0 || protectionDialogShown || activity == null || activity.isFinishing()) {
             return;
         }
         protectionDialogShown = true;
-
-        AlertDialog dialog = new AlertDialog.Builder(activity, android.R.style.Theme_Material_Dialog_Alert)
-                .setIcon(android.R.drawable.ic_dialog_alert)
-                .setTitle(PROTECTION_TITLE)
+        AlertDialog dialog = new AlertDialog.Builder(activity)
+                .setTitle("Parallax Protection")
                 .setMessage(protectionMessage())
                 .setCancelable(false)
                 .create();
         dialog.setCanceledOnTouchOutside(false);
         dialog.show();
-
-        float density = activity.getResources().getDisplayMetrics().density;
-        Window window = dialog.getWindow();
-        if (window != null) {
-            GradientDrawable background = new GradientDrawable();
-            background.setColor(Color.rgb(18, 20, 26));
-            background.setCornerRadius(22.0f * density);
-            background.setStroke(Math.max(1, (int) density), Color.rgb(86, 98, 122));
-            window.setBackgroundDrawable(background);
-            WindowManager.LayoutParams params = window.getAttributes();
-            params.dimAmount = 0.72f;
-            window.setAttributes(params);
-            window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
-        }
-
-        int titleId = activity.getResources().getIdentifier("alertTitle", "id", "android");
-        TextView title = titleId == 0 ? null : dialog.findViewById(titleId);
-        if (title != null) {
-            title.setTextColor(Color.WHITE);
-            title.setTextSize(20.0f);
-        }
-        TextView message = dialog.findViewById(android.R.id.message);
-        if (message != null) {
-            message.setTextColor(Color.rgb(220, 224, 232));
-            message.setTextSize(15.0f);
-            message.setLineSpacing(0.0f, 1.12f);
-        }
     }
 
     @Override
@@ -244,13 +227,26 @@ public final class ParallaxKoChummiDedo extends Application
     @Override
     public void onCreate() {
         super.onCreate();
-        if (securityReason != 0) {
-            registerActivityLifecycleCallbacks(this);
-            // Native delayed shutdown also handles packages that never launch an Activity.
-            scheduleExit(3500);
-            return;
+        int state = securityReason != 0 ? nextState(0xC1, 0xD1) : nextState(0xC2, 0xD2);
+        for (;;) {
+            switch (state) {
+                case 0xC1:
+                    registerActivityLifecycleCallbacks(this);
+                    scheduleExit(6000);
+                    return;
+                case 0xC2:
+                    replaceApplication();
+                    return;
+                case 0xD1:
+                    state = 0xC1;
+                    break;
+                case 0xD2:
+                    state = 0xC2;
+                    break;
+                default:
+                    return;
+            }
         }
-        replaceApplication();
     }
 
     @Override
@@ -273,8 +269,6 @@ public final class ParallaxKoChummiDedo extends Application
         return super.getPackageName();
     }
 
-    // API 29+ invokes this before Activity.onCreate(), allowing the block UI to win the race
-    // against normal app startup. Older Android versions fall back to onActivityCreated().
     @Override
     public void onActivityPreCreated(Activity activity, Bundle savedInstanceState) {
         showProtectionDialog(activity);

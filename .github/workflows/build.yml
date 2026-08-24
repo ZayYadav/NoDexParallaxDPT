@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'ci/**'
+      - 'hard/**'
   pull_request:
   workflow_dispatch:
 
@@ -117,12 +118,88 @@ jobs:
             exit 1
           fi
 
-          for abi in arm arm64 x86 x86_64; do
+          for abi in arm arm64; do
             test -s "executable/shell-files/libs/${abi}/ParallaxLover.so"
           done
 
+          if find executable/shell-files/libs -type f \( -path '*/x86/*' -o -path '*/x86_64/*' \) -print -quit | grep -q .; then
+            echo "x86/x86_64 native artifacts must not be present" >&2
+            exit 1
+          fi
+
+          # The matching key is carried by the CLI manifest. It must never be duplicated
+          # as a plaintext shell-files sidecar that gets uploaded with native artifacts.
+          if [ -e executable/shell-files/build-key ]; then
+            echo "Plaintext build-key sidecar must not be present in release artifacts" >&2
+            exit 1
+          fi
+
           echo "Build outputs verified:"
           find executable -maxdepth 4 -type f -print | sort
+
+      - name: Verify native ELF hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          READELF="$TOOLCHAIN/llvm-readelf"
+          NM="$TOOLCHAIN/llvm-nm"
+          test -x "$READELF"
+          test -x "$NM"
+
+          for abi in arm arm64; do
+            SO="executable/shell-files/libs/${abi}/ParallaxLover.so"
+            echo "Checking native hardening: $SO"
+
+            "$READELF" -lW "$SO" | grep -q 'GNU_RELRO' || {
+              echo "Missing GNU_RELRO in $SO" >&2
+              exit 1
+            }
+
+            "$READELF" -dW "$SO" | grep -Eq '\(BIND_NOW\)|FLAGS.*NOW' || {
+              echo "Missing immediate binding (-z now) in $SO" >&2
+              exit 1
+            }
+
+            STACK_LINE=$("$READELF" -lW "$SO" | grep 'GNU_STACK' || true)
+            if [ -z "$STACK_LINE" ]; then
+              echo "Missing GNU_STACK header in $SO" >&2
+              exit 1
+            fi
+            if printf '%s\n' "$STACK_LINE" | grep -q 'RWE'; then
+              echo "Executable stack detected in $SO" >&2
+              exit 1
+            fi
+
+            EXPORTS=$("$NM" -D --defined-only "$SO" | awk '{print $3}' | sed '/^$/d' | sort -u)
+            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|PARALLAX_UNKNOWN_DATA)$' || true)
+            if [ -n "$UNEXPECTED" ]; then
+              echo "Unexpected exported native symbols in $SO:" >&2
+              printf '%s\n' "$UNEXPECTED" >&2
+              exit 1
+            fi
+            printf '%s\n' "$EXPORTS" | grep -qx 'JNI_OnLoad' || {
+              echo "JNI_OnLoad is not exported in $SO" >&2
+              exit 1
+            }
+            printf '%s\n' "$EXPORTS" | grep -qx 'PARALLAX_UNKNOWN_DATA' || {
+              echo "Build-time native key patch symbol is not exported in $SO" >&2
+              exit 1
+            }
+
+            if "$READELF" -SW "$SO" | grep -q '[[:space:]]\.symtab[[:space:]]'; then
+              echo "Release $SO still contains a static symbol table" >&2
+              exit 1
+            fi
+          done
+
+          echo "### Native ELF hardening" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ABIs: armeabi-v7a + arm64-v8a only" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GNU RELRO: enforced" >> "$GITHUB_STEP_SUMMARY"
+          echo "- immediate binding (BIND_NOW): enforced" >> "$GITHUB_STEP_SUMMARY"
+          echo "- executable stack: rejected" >> "$GITHUB_STEP_SUMMARY"
+          echo "- dynamic exports: restricted to JNI_OnLoad + build-time key patch symbol" >> "$GITHUB_STEP_SUMMARY"
+          echo "- static symbol table in release SO: rejected" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4

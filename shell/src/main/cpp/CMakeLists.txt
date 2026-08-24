@@ -10,6 +10,7 @@ set(PARALLAX_NATIVE_SOURCE
         parallax_risk.cpp
         parallax_crypto.cpp
         parallax_hardening.cpp
+        parallax_runtime_guard.cpp
         parallax_policy.cpp
         rc4/rc4.c
         common/parallax_string.c
@@ -79,10 +80,11 @@ if(${CMAKE_BUILD_TYPE} STREQUAL "Debug")
     message(WARNING "!!!WARNNING:opened log!!!")
 else()
     set(OPTIMIZATION_LEVEL "-Oz")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fvisibility=hidden ${OPTIMIZATION_LEVEL}")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fvisibility=hidden ${OPTIMIZATION_LEVEL}")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL")
-    message("closed log & stripped so symbols")
+    set(PARALLAX_RELEASE_COMMON "-fvisibility=hidden -ffunction-sections -fdata-sections -fstack-protector-strong -fno-common -ftrivial-auto-var-init=zero -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -DNDEBUG -ffile-prefix-map=${CMAKE_SOURCE_DIR}=. ${OPTIMIZATION_LEVEL}")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${PARALLAX_RELEASE_COMMON}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${PARALLAX_RELEASE_COMMON} -fvisibility-inlines-hidden")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--exclude-libs,ALL -Wl,--gc-sections -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/parallax.exports.map")
+    message("release hardening: hidden visibility, stack protector, FORTIFY, RELRO/NOW, NX stack, section GC")
 endif()
 
 message("so name: ${SO_NAME}")
@@ -90,7 +92,7 @@ message("so name: ${SO_NAME}")
 if(NOT DEFINED PARALLAX_BUILD_KEY OR PARALLAX_BUILD_KEY STREQUAL "")
     message(FATAL_ERROR "PARALLAX_BUILD_KEY is required")
 endif()
-message("parallax build key: ${PARALLAX_BUILD_KEY}")
+# Never print PARALLAX_BUILD_KEY: it is intentionally kept out of CI logs.
 
 add_compile_definitions(JNI_BRIDGE_NAME="${JNI_BRIDGE_NAME}")
 add_compile_definitions(SO_NAME="${SO_NAME}.so")
@@ -109,6 +111,8 @@ target_compile_options(${SO_NAME} PRIVATE
         -Wall
         -Wextra
         -Werror
+        -Wformat
+        -Wformat-security
 )
 target_link_options(${SO_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
 

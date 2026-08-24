@@ -29,6 +29,9 @@ inline int get_cache_page_size() {
 
 #define SHELL_CONFIG_IN_ZIP "assets/ItsParallaxBaby"
 #define CODE_ITEM_NAME_IN_ZIP "assets/Parallax.love"
+// The hollowed protected DEX archive is appended to the physical classes.dex entry.
+// The final four bytes store the appended archive length; native code reads only that
+// tail region while ART sees the one-class bootstrap at the front of the entry.
 #define COMBINE_DEX_FILES_NAME_IN_ZIP "classes.dex"
 #define JUNK_CLASS_FULL_NAME "com/parallax/parallax/junkcode/JunkClass"
 
