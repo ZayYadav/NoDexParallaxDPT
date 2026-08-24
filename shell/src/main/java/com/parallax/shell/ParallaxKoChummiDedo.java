@@ -9,6 +9,8 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 
+import com.parallax.parallax.BuildConfig;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
