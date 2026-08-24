@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - 'ci/**'
+      - 'hard/**'
   pull_request:
   workflow_dispatch:
 
