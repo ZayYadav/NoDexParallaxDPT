@@ -118,9 +118,14 @@ jobs:
             exit 1
           fi
 
-          for abi in arm arm64 x86 x86_64; do
+          for abi in arm arm64; do
             test -s "executable/shell-files/libs/${abi}/ParallaxLover.so"
           done
+
+          if find executable/shell-files/libs -type f \( -path '*/x86/*' -o -path '*/x86_64/*' \) -print -quit | grep -q .; then
+            echo "x86/x86_64 native artifacts must not be present" >&2
+            exit 1
+          fi
 
           # The matching key is carried by the CLI manifest. It must never be duplicated
           # as a plaintext shell-files sidecar that gets uploaded with native artifacts.
@@ -142,7 +147,7 @@ jobs:
           test -x "$READELF"
           test -x "$NM"
 
-          for abi in arm arm64 x86 x86_64; do
+          for abi in arm arm64; do
             SO="executable/shell-files/libs/${abi}/ParallaxLover.so"
             echo "Checking native hardening: $SO"
 
@@ -189,6 +194,7 @@ jobs:
           done
 
           echo "### Native ELF hardening" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ABIs: armeabi-v7a + arm64-v8a only" >> "$GITHUB_STEP_SUMMARY"
           echo "- GNU RELRO: enforced" >> "$GITHUB_STEP_SUMMARY"
           echo "- immediate binding (BIND_NOW): enforced" >> "$GITHUB_STEP_SUMMARY"
           echo "- executable stack: rejected" >> "$GITHUB_STEP_SUMMARY"
