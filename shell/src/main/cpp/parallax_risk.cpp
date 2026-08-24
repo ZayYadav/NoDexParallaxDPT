@@ -4,6 +4,7 @@
 
 #include "parallax_risk.h"
 #include <android/api-level.h>
+#include <atomic>
 #include <climits>
 #include <signal.h>
 #include <stdint.h>
@@ -14,6 +15,14 @@
 #include "parallax.h"
 
 extern ShellConfig g_shell_config;
+
+namespace {
+constexpr jint SECURITY_ROOT = 1;
+constexpr jint SECURITY_DEBUGGABLE = 1 << 1;
+constexpr jint SECURITY_TRACER = 1 << 2;
+constexpr jint SECURITY_HOOK_FRAMEWORK = 1 << 3;
+std::atomic<bool> g_risk_thread_started{false};
+}
 
 PARALLAX_ENCRYPT NO_INLINE void parallax_crash() {
 #ifdef DEBUG
@@ -83,8 +92,6 @@ static bool detectRootEnvironment() {
         return true;
     }
 
-    // Conservative, well-known root-management locations. No process scanning or
-    // instrumentation-specific probing is performed here.
     static const char *rootPaths[] = {
             "/system/bin/su",
             "/system/xbin/su",
@@ -111,8 +118,7 @@ static bool detectRootEnvironment() {
         return true;
     }
 
-    // Engineering/test system properties are treated as an unsupported modified
-    // environment for this strict policy. This can intentionally reject custom ROMs.
+    // Strict policy by design: engineering/test builds are unsupported for protected apps.
     if (propertyContains("ro.build.tags", "test-keys")
         || propertyEquals("ro.debuggable", "1")
         || propertyEquals("ro.secure", "0")) {
@@ -151,18 +157,99 @@ static bool isApplicationDebuggable(JNIEnv *env, jobject context) {
     jint flags = env->GetIntField(appInfo, flagsField);
     parallax::jni::DeleteLocalRef(env, appInfoClass);
     parallax::jni::DeleteLocalRef(env, appInfo);
-
-    // android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE
     return (flags & 0x2) != 0;
+}
+
+static bool hasTracerPid() {
+    FILE *fp = fopen(AY_OBFUSCATE("/proc/self/status"), "r");
+    if (fp == nullptr) {
+        return false;
+    }
+
+    const char *tracerKey = AY_OBFUSCATE("TracerPid:");
+    char line[256] = {0};
+    bool traced = false;
+    while (fgets(line, sizeof(line), fp) != nullptr) {
+        if (strncmp(line, tracerKey, strlen(tracerKey)) == 0) {
+            int pid = 0;
+            if (sscanf(line + strlen(tracerKey), "%d", &pid) == 1 && pid != 0) {
+                traced = true;
+            }
+            break;
+        }
+    }
+    fclose(fp);
+    return traced;
+}
+
+static bool hasHookFrameworkMarker() {
+    FILE *fp = fopen(AY_OBFUSCATE("/proc/self/maps"), "r");
+    if (fp == nullptr) {
+        return false;
+    }
+
+    const char *markers[] = {
+            AY_OBFUSCATE("frida-agent"),
+            AY_OBFUSCATE("libfrida-gadget"),
+            AY_OBFUSCATE("frida-gadget"),
+            AY_OBFUSCATE("xposed"),
+            AY_OBFUSCATE("lsposed"),
+            AY_OBFUSCATE("edxp"),
+            AY_OBFUSCATE("lsplant"),
+            AY_OBFUSCATE("sandhook"),
+            AY_OBFUSCATE("yahfa")
+    };
+
+    char line[1024] = {0};
+    bool detected = false;
+    while (fgets(line, sizeof(line), fp) != nullptr) {
+        for (const char *marker : markers) {
+            if (strstr(line, marker) != nullptr) {
+                detected = true;
+                break;
+            }
+        }
+        if (detected) {
+            break;
+        }
+    }
+    fclose(fp);
+    return detected;
+}
+
+static bool classExists(JNIEnv *env, const char *name) {
+    if (env == nullptr) {
+        return false;
+    }
+    jclass klass = env->FindClass(name);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
+    if (klass == nullptr) {
+        return false;
+    }
+    env->DeleteLocalRef(klass);
+    return true;
+}
+
+static bool hasHookFrameworkClass(JNIEnv *env) {
+    return classExists(env, AY_OBFUSCATE("de/robv/android/xposed/XposedBridge"))
+           || classExists(env, AY_OBFUSCATE("de/robv/android/xposed/XC_MethodHook"));
 }
 
 PARALLAX_ENCRYPT jint securityStatus(JNIEnv *env, jclass, jobject context) {
     jint result = 0;
     if (detectRootEnvironment()) {
-        result |= 1;
+        result |= SECURITY_ROOT;
     }
     if (isApplicationDebuggable(env, context)) {
-        result |= (1 << 1);
+        result |= SECURITY_DEBUGGABLE;
+    }
+    if (hasTracerPid()) {
+        result |= SECURITY_TRACER;
+    }
+    if (hasHookFrameworkMarker() || hasHookFrameworkClass(env)) {
+        result |= SECURITY_HOOK_FRAMEWORK;
     }
     DLOGI("Parallax Protection policy status: 0x%x", result);
     return result;
@@ -287,52 +374,32 @@ PARALLAX_ENCRYPT NO_INLINE void verifyLibcTextCrc() {
 }
 
 PARALLAX_ENCRYPT void detectFrida() {
-    const char *frida_agent = AY_OBFUSCATE("frida-agent");
     const char *pool_frida = AY_OBFUSCATE("pool-frida");
     const char *gmain = AY_OBFUSCATE("gmain");
     const char *gbus = AY_OBFUSCATE("gdbus");
     const char *gum_js_loop = AY_OBFUSCATE("gum-js-loop");
 
-    int frida_so_count = find_in_maps(1, frida_agent);
-    if (frida_so_count > 0) {
-        DLOGD("found frida so");
+    if (hasHookFrameworkMarker()) {
+        DLOGD("found instrumentation/hook framework marker");
         parallax_crash();
     }
-    int frida_thread_count = find_in_threads_list(4
-            , pool_frida
-            , gmain
-            , gbus
-            , gum_js_loop);
 
+    int frida_thread_count = find_in_threads_list(4,
+            pool_frida,
+            gmain,
+            gbus,
+            gum_js_loop);
     if (frida_thread_count >= 2) {
-        DLOGD("found frida threads");
+        DLOGD("found instrumentation threads");
         parallax_crash();
     }
 }
 
 PARALLAX_ENCRYPT void detectDebugger() {
-    const char *status_path = AY_OBFUSCATE("/proc/self/status");
-    FILE *fp = fopen(status_path, "r");
-    if (fp == nullptr) {
-        DLOGW("cannot open /proc/self/status, skip tracer pid check");
-        return;
+    if (hasTracerPid()) {
+        DLOGD("found tracer pid");
+        parallax_crash();
     }
-
-    const char *tracer_key = AY_OBFUSCATE("TracerPid:");
-    char line[256];
-    while (fgets(line, sizeof(line), fp) != nullptr) {
-        if (strncmp(line, tracer_key, strlen(tracer_key)) == 0) {
-            int tracer_pid = 0;
-            sscanf(line + strlen(tracer_key), "%d", &tracer_pid);
-            if (tracer_pid != 0) {
-                DLOGD("found tracer pid: %d", tracer_pid);
-                fclose(fp);
-                parallax_crash();
-            }
-            break;
-        }
-    }
-    fclose(fp);
 }
 
 [[noreturn]] PARALLAX_ENCRYPT void *detectRiskOnThread(__unused void *args) {
@@ -346,13 +413,22 @@ PARALLAX_ENCRYPT void detectDebugger() {
         if ((g_shell_config.risk_check_flags & FLAG_DISABLE_ANTI_DEBUG) == 0) {
             detectDebugger();
         }
-        sleep(10);
+        sleep(5);
     }
 }
 
 PARALLAX_ENCRYPT void detectRisk() {
+    bool expected = false;
+    if (!g_risk_thread_started.compare_exchange_strong(expected, true)) {
+        return;
+    }
+
     pthread_t t;
-    pthread_create(&t, nullptr, detectRiskOnThread, nullptr);
+    if (pthread_create(&t, nullptr, detectRiskOnThread, nullptr) == 0) {
+        pthread_detach(t);
+    } else {
+        g_risk_thread_started.store(false);
+    }
 }
 
 PARALLAX_ENCRYPT void verifyAppSignature(JNIEnv *env, jobject context, const char *expectedSha256) {
