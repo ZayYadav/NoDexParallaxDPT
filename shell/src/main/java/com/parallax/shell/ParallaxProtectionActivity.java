@@ -2,6 +2,7 @@ package com.parallax.shell;
 
 import android.app.Activity;
 import android.app.Dialog;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -43,6 +44,7 @@ public final class ParallaxProtectionActivity extends Activity
     private TextView videoStatus;
     private File downloadedVideo;
     private Handler mainHandler;
+    private volatile boolean downloadFailed;
 
     static void request(Activity activity) {
         if (activity == null || activity.isFinishing()) {
@@ -56,7 +58,16 @@ public final class ParallaxProtectionActivity extends Activity
             return;
         }
         try {
-            Intent intent = new Intent(activity, ParallaxProtectionActivity.class);
+            // Re-launch an already-declared host component. Once the protection state is
+            // latched, ParallaxProtectionFactory substitutes this warning Activity before
+            // Android attempts to resolve the protected class from the locked DEX.
+            ComponentName component = activity.getComponentName();
+            if (component == null) {
+                LAUNCH_REQUESTED.set(false);
+                return;
+            }
+            Intent intent = new Intent();
+            intent.setComponent(component);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                     | Intent.FLAG_ACTIVITY_CLEAR_TOP
                     | Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -265,7 +276,14 @@ public final class ParallaxProtectionActivity extends Activity
     @Override
     public void run() {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            if (downloadedVideo == null || videoView == null || videoStatus == null) {
+            if (videoView == null || videoStatus == null) {
+                return;
+            }
+            if (downloadFailed || downloadedVideo == null) {
+                if (progressBar != null) {
+                    progressBar.setVisibility(android.view.View.GONE);
+                }
+                videoStatus.setText("Video unavailable. Protection warning remains active.");
                 return;
             }
             videoStatus.setText("Security notice ready");
@@ -281,22 +299,11 @@ public final class ParallaxProtectionActivity extends Activity
 
         try {
             downloadedVideo = downloadVideo();
-            if (mainHandler != null) {
-                mainHandler.post(this);
-            }
         } catch (Throwable error) {
-            if (mainHandler != null && videoStatus != null) {
-                final String message = "Video unavailable. Protection warning remains active.";
-                videoStatus.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (progressBar != null) {
-                            progressBar.setVisibility(android.view.View.GONE);
-                        }
-                        videoStatus.setText(message);
-                    }
-                });
-            }
+            downloadFailed = true;
+        }
+        if (mainHandler != null) {
+            mainHandler.post(this);
         }
     }
 
