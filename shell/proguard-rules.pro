@@ -6,9 +6,14 @@
     public static int v(...);
 }
 
-# The manifest/native registration requires this exact class and its public/protected
-# entry-point names, but R8 may optimize their bodies for a smaller single-class DEX.
+# Framework/manifest/native entry points must keep their class names. R8 may still
+# optimize method bodies so the blocked-mode protection bootstrap remains compact.
 -keep,allowoptimization class com.parallax.shell.ParallaxKoChummiDedo
+-keep,allowoptimization class com.parallax.shell.ParallaxProtectionFactory
+-keep,allowoptimization class com.parallax.shell.ParallaxProtectionActivity
+-keep,allowoptimization class com.parallax.shell.ParallaxBlockedProvider
+-keep,allowoptimization class com.parallax.shell.ParallaxBlockedService
+-keep,allowoptimization class com.parallax.shell.ParallaxBlockedReceiver
 
 -keepclassmembers,allowoptimization class com.parallax.shell.ParallaxKoChummiDedo {
     public <init>();
@@ -16,8 +21,8 @@
     protected *** *(...);
 }
 
-# Preserve the compact opaque dispatcher only around the two sensitive bootstrap paths.
-# Private names may still be obfuscated, while ordinary helpers remain fully shrinkable.
+# Preserve the opaque dispatcher around the sensitive bootstrap paths while allowing
+# ordinary implementation details to be optimized/obfuscated.
 -keepclassmembers,allowobfuscation class com.parallax.shell.ParallaxKoChummiDedo {
     private void prepare(android.content.Context);
     private void replaceApplication();
