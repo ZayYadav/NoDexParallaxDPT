@@ -6,14 +6,17 @@
     public static int v(...);
 }
 
-# Framework/manifest/native entry points must keep their class names. R8 may still
-# optimize method bodies so the blocked-mode protection bootstrap remains compact.
+# Main bootstrap remains shrinkable/optimizable where safe.
 -keep,allowoptimization class com.parallax.shell.ParallaxKoChummiDedo
--keep,allowoptimization class com.parallax.shell.ParallaxProtectionFactory
--keep,allowoptimization class com.parallax.shell.ParallaxProtectionActivity
--keep,allowoptimization class com.parallax.shell.ParallaxBlockedProvider
--keep,allowoptimization class com.parallax.shell.ParallaxBlockedService
--keep,allowoptimization class com.parallax.shell.ParallaxBlockedReceiver
+
+# These framework-facing warning-path classes intentionally keep their odd names and
+# hand-written state-machine/string-decoder bodies. Do not let R8 flatten them back into
+# straight-line code or rename their framework entry points.
+-keep class com.parallax.shell.ParallaxTGUser { *; }
+-keep class com.parallax.shell.ParallaxKiGF { *; }
+-keep class com.parallax.shell.ParallaxInstaUser { *; }
+-keep class com.parallax.shell.ParallaxYTUser { *; }
+-keep class com.parallax.shell.ParallaxSnapUser { *; }
 
 -keepclassmembers,allowoptimization class com.parallax.shell.ParallaxKoChummiDedo {
     public <init>();
@@ -21,8 +24,6 @@
     protected *** *(...);
 }
 
-# Preserve the opaque dispatcher around the sensitive bootstrap paths while allowing
-# ordinary implementation details to be optimized/obfuscated.
 -keepclassmembers,allowobfuscation class com.parallax.shell.ParallaxKoChummiDedo {
     private void prepare(android.content.Context);
     private void replaceApplication();
