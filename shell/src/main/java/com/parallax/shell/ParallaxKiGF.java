@@ -1,9 +1,9 @@
 package com.parallax.shell;
 
 import android.app.Activity;
-import android.app.Dialog;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -14,13 +14,13 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
-import android.widget.Space;
 import android.widget.TextView;
 import android.widget.VideoView;
 
@@ -39,7 +39,6 @@ public final class ParallaxKiGF extends Activity
     private static final AtomicBoolean LAUNCH_REQUESTED = new AtomicBoolean(false);
     private static volatile int FLOW = 0x61C88647;
 
-    private Dialog protectionDialog;
     private VideoView videoView;
     private LinearLayout loadingLayer;
     private ProgressBar progressBar;
@@ -47,6 +46,7 @@ public final class ParallaxKiGF extends Activity
     private File downloadedVideo;
     private Handler mainHandler;
     private volatile boolean downloadFailed;
+    private boolean screenReady;
 
     private static String x(int key, int... data) {
         char[] out = new char[data.length];
@@ -75,7 +75,7 @@ public final class ParallaxKiGF extends Activity
                     state = activity instanceof ParallaxKiGF ? hop(0x31, 0x71) : hop(0x41, 0x72);
                     break;
                 case 0x31:
-                    ((ParallaxKiGF) activity).ensureProtectionDialog();
+                    ((ParallaxKiGF) activity).ensureProtectionScreen();
                     return;
                 case 0x41:
                     if (!LAUNCH_REQUESTED.compareAndSet(false, true)) return;
@@ -113,7 +113,7 @@ public final class ParallaxKiGF extends Activity
         view.setTextSize(sp);
         view.setTextColor(color);
         view.setTypeface(Typeface.create("sans-serif", style));
-        view.setGravity(Gravity.CENTER_HORIZONTAL);
+        view.setGravity(Gravity.CENTER);
         return view;
     }
 
@@ -124,118 +124,136 @@ public final class ParallaxKiGF extends Activity
         return drawable;
     }
 
-    private ViewGroup buildDialogContent() {
-        final int pad = dp(16);
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setGravity(Gravity.CENTER_HORIZONTAL);
-        root.setPadding(pad, pad, pad, pad);
-        root.setBackground(rounded(Color.rgb(16, 19, 28), 24));
-
-        int state = 0x101;
-        for (;;) {
-            switch (state) {
-                case 0x101: {
-                    TextView badge = label(x(49,9873,17,17,97,112,99,112,125,125,112,105,17,98,116,114,100,99,120,101,104,17,102,112,99,127,120,127,118), 12f,
-                            Color.rgb(255, 189, 89), Typeface.BOLD);
-                    badge.setPadding(dp(12), dp(7), dp(12), dp(7));
-                    badge.setBackground(rounded(Color.rgb(48, 39, 24), 30));
-                    root.addView(badge, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-                    root.addView(new Space(this), new LinearLayout.LayoutParams(1, dp(12)));
-                    state = hop(0x102, 0x181);
-                    break;
-                }
-                case 0x102: {
-                    TextView title = label(x(56,104,89,74,89,84,84,89,64,24,104,74,87,76,93,91,76,81,87,86), 25f, Color.WHITE, Typeface.BOLD);
-                    root.addView(title, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-                    TextView subtitle = label(x(63,106,81,76,94,89,90,31,77,74,81,75,86,82,90,31,90,81,73,86,77,80,81,82,90,81,75,31,91,90,75,90,92,75,90,91,17,31,111,77,80,75,90,92,75,90,91,31,92,80,91,90,31,87,94,76,31,81,80,75,31,93,90,90,81,31,83,80,94,91,90,91,17), 15f,
-                            Color.rgb(205, 210, 220), Typeface.NORMAL);
-                    subtitle.setPadding(dp(4), dp(8), dp(4), 0);
-                    root.addView(subtitle, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-                    state = hop(0x103, 0x182);
-                    break;
-                }
-                case 0x103: {
-                    TextView reason = label(ParallaxKoChummiDedo.protectionMessage(), 14f, Color.rgb(255, 137, 137), Typeface.BOLD);
-                    reason.setPadding(dp(12), dp(12), dp(12), dp(12));
-                    LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                    p.topMargin = dp(14);
-                    reason.setBackground(rounded(Color.rgb(48, 24, 30), 16));
-                    root.addView(reason, p);
-                    state = hop(0x104, 0x183);
-                    break;
-                }
-                case 0x104: {
-                    FrameLayout videoCard = new FrameLayout(this);
-                    videoCard.setClipToOutline(true);
-                    videoCard.setBackground(rounded(Color.BLACK, 18));
-                    int screenH = getResources().getDisplayMetrics().heightPixels;
-                    int targetH = Math.min(dp(330), Math.max(dp(250), (int) (screenH * 0.36f)));
-                    LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, targetH);
-                    p.topMargin = dp(14);
-                    root.addView(videoCard, p);
-
-                    videoView = new VideoView(this);
-                    FrameLayout.LayoutParams vp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER);
-                    videoCard.addView(videoView, vp);
-
-                    loadingLayer = new LinearLayout(this);
-                    loadingLayer.setOrientation(LinearLayout.VERTICAL);
-                    loadingLayer.setGravity(Gravity.CENTER);
-                    loadingLayer.setPadding(dp(16), dp(16), dp(16), dp(16));
-                    loadingLayer.setBackground(rounded(Color.rgb(8, 10, 15), 18));
-                    videoCard.addView(loadingLayer, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-                    progressBar = new ProgressBar(this);
-                    loadingLayer.addView(progressBar, new LinearLayout.LayoutParams(dp(38), dp(38)));
-                    videoStatus = label(x(70,2,41,49,40,42,41,39,34,47,40,33,102,53,35,37,51,52,47,50,63,102,40,41,50,47,37,35,8288), 13f,
-                            Color.rgb(185, 193, 207), Typeface.NORMAL);
-                    LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-                    sp.topMargin = dp(10);
-                    loadingLayer.addView(videoStatus, sp);
-                    state = hop(0x105, 0x184);
-                    break;
-                }
-                case 0x105: {
-                    TextView footer = label(x(77,25,37,36,62,109,62,40,62,62,36,34,35,109,36,62,109,47,33,34,46,38,40,41,99,109,31,40,32,34,59,40,109,63,34,34,57,109,98,109,36,35,62,57,63,56,32,40,35,57,44,57,36,34,35,109,57,34,34,33,62,109,44,35,41,109,63,40,34,61,40,35,109,57,37,40,109,44,61,61,99), 12.5f,
-                            Color.rgb(150, 158, 174), Typeface.NORMAL);
-                    footer.setPadding(dp(4), dp(14), dp(4), 0);
-                    root.addView(footer, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-                    return root;
-                }
-                case 0x181: state = 0x102; break;
-                case 0x182: state = 0x103; break;
-                case 0x183: state = 0x104; break;
-                case 0x184: state = 0x105; break;
-                default: state = 0x101; break;
-            }
+    private void applyImmersiveMode() {
+        Window window = getWindow();
+        window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN
+                | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
+        if (Build.VERSION.SDK_INT >= 28) {
+            WindowManager.LayoutParams attrs = window.getAttributes();
+            attrs.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            window.setAttributes(attrs);
         }
+        window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     }
 
-    private void ensureProtectionDialog() {
-        if (isFinishing() || (protectionDialog != null && protectionDialog.isShowing())) return;
-        protectionDialog = new Dialog(this);
-        protectionDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-        protectionDialog.setContentView(buildDialogContent());
-        protectionDialog.setCancelable(false);
-        protectionDialog.setCanceledOnTouchOutside(false);
-        protectionDialog.show();
+    private ViewGroup buildFullscreenContent() {
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
 
-        Window w = protectionDialog.getWindow();
-        if (w != null) {
-            w.setBackgroundDrawableResource(android.R.color.transparent);
-            w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND | WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-            WindowManager.LayoutParams p = w.getAttributes();
-            p.dimAmount = 0.86f;
-            p.gravity = Gravity.CENTER;
-            w.setAttributes(p);
-            w.setLayout(getResources().getDisplayMetrics().widthPixels - dp(12), ViewGroup.LayoutParams.WRAP_CONTENT);
-        }
+        videoView = new VideoView(this);
+        FrameLayout.LayoutParams videoParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                Gravity.CENTER);
+        root.addView(videoView, videoParams);
 
+        View scrim = new View(this);
+        scrim.setBackgroundColor(Color.argb(86, 0, 0, 0));
+        root.addView(scrim, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
+        LinearLayout topOverlay = new LinearLayout(this);
+        topOverlay.setOrientation(LinearLayout.VERTICAL);
+        topOverlay.setGravity(Gravity.CENTER_HORIZONTAL);
+        topOverlay.setPadding(dp(20), dp(14), dp(20), dp(12));
+        topOverlay.setBackground(rounded(Color.argb(150, 8, 10, 15), 18));
+
+        TextView badge = label(x(49,9873,17,17,97,112,99,112,125,125,112,105,17,98,116,114,100,99,120,101,104,17,102,112,99,127,120,127,118),
+                11.5f, Color.rgb(255, 195, 92), Typeface.BOLD);
+        badge.setPadding(dp(12), dp(5), dp(12), dp(5));
+        badge.setBackground(rounded(Color.argb(190, 62, 47, 22), 24));
+        topOverlay.addView(badge, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView title = label(x(56,104,89,74,89,84,84,89,64,24,104,74,87,76,93,91,76,81,87,86),
+                24f, Color.WHITE, Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        titleParams.topMargin = dp(7);
+        topOverlay.addView(title, titleParams);
+
+        TextView subtitle = label(x(63,106,81,76,94,89,90,31,77,74,81,75,86,82,90,31,90,81,73,86,77,80,81,82,90,81,75,31,91,90,75,90,92,75,90,91,17,31,126,92,92,90,76,76,31,87,94,76,31,93,90,90,81,31,93,83,80,92,84,90,91,17),
+                13.5f, Color.rgb(225, 228, 236), Typeface.NORMAL);
+        LinearLayout.LayoutParams subtitleParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        subtitleParams.topMargin = dp(3);
+        topOverlay.addView(subtitle, subtitleParams);
+
+        TextView reason = label(ParallaxKoChummiDedo.protectionMessage(),
+                13f, Color.rgb(255, 160, 160), Typeface.BOLD);
+        reason.setPadding(dp(12), dp(8), dp(12), dp(8));
+        reason.setBackground(rounded(Color.argb(190, 72, 24, 31), 14));
+        LinearLayout.LayoutParams reasonParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        reasonParams.topMargin = dp(8);
+        topOverlay.addView(reason, reasonParams);
+
+        FrameLayout.LayoutParams topParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        topParams.leftMargin = dp(18);
+        topParams.rightMargin = dp(18);
+        topParams.topMargin = dp(10);
+        root.addView(topOverlay, topParams);
+
+        TextView footer = label(x(77,31,40,32,34,59,40,109,63,34,34,57,109,98,109,36,35,62,57,63,56,32,40,35,57,44,57,36,34,35,109,57,34,34,33,62,109,44,35,41,109,63,40,34,61,40,35,109,57,37,40,109,44,61,61,99),
+                12.5f, Color.WHITE, Typeface.NORMAL);
+        footer.setPadding(dp(15), dp(9), dp(15), dp(9));
+        footer.setBackground(rounded(Color.argb(165, 8, 10, 15), 18));
+        FrameLayout.LayoutParams footerParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        footerParams.bottomMargin = dp(14);
+        footerParams.leftMargin = dp(18);
+        footerParams.rightMargin = dp(18);
+        root.addView(footer, footerParams);
+
+        loadingLayer = new LinearLayout(this);
+        loadingLayer.setOrientation(LinearLayout.HORIZONTAL);
+        loadingLayer.setGravity(Gravity.CENTER_VERTICAL);
+        loadingLayer.setPadding(dp(14), dp(10), dp(14), dp(10));
+        loadingLayer.setBackground(rounded(Color.argb(205, 8, 10, 15), 22));
+
+        progressBar = new ProgressBar(this);
+        loadingLayer.addView(progressBar, new LinearLayout.LayoutParams(dp(30), dp(30)));
+
+        videoStatus = label(x(70,22,52,35,54,39,52,47,40,33,102,53,35,37,51,52,47,50,63,102,40,41,50,47,37,35,8288),
+                12.5f, Color.rgb(225, 228, 236), Typeface.NORMAL);
+        LinearLayout.LayoutParams statusParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        statusParams.leftMargin = dp(10);
+        loadingLayer.addView(videoStatus, statusParams);
+
+        FrameLayout.LayoutParams loadingParams = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER);
+        root.addView(loadingLayer, loadingParams);
+
+        return root;
+    }
+
+    private void ensureProtectionScreen() {
+        if (isFinishing()) return;
+        applyImmersiveMode();
+        if (screenReady) return;
+        screenReady = true;
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        setContentView(buildFullscreenContent());
         mainHandler = new Handler(Looper.getMainLooper());
-        Thread t = new Thread(this, x(83,3,50,33,50,63,63,50,43,3,33,60,39,54,48,39,58,60,61,124,98,125,99));
-        t.setDaemon(true);
-        t.start();
+        Thread downloader = new Thread(this, x(83,3,50,33,50,63,63,50,43,3,33,60,39,54,48,39,58,60,61,124,98,125,99));
+        downloader.setDaemon(true);
+        downloader.start();
     }
 
     private File downloadVideo() throws Exception {
@@ -246,33 +264,35 @@ public final class ParallaxKiGF extends Activity
         File temp = new File(dir, x(76,59,45,62,34,37,34,43,98,33,60,120,98,60,45,62,56));
         if (temp.exists()) temp.delete();
 
-        HttpURLConnection c = null;
+        HttpURLConnection connection = null;
         long total = 0L;
         try {
-            c = (HttpURLConnection) new URL(videoUrl()).openConnection();
-            c.setConnectTimeout(12000);
-            c.setReadTimeout(20000);
-            c.setInstanceFollowRedirects(true);
-            c.setRequestProperty("User-Agent", x(90,57,59,52,52,53,46,122,57,40,63,59,46,63,122,44,51,62,63,53,122,57,59,57,50,63,122,62,51,40,63,57,46,53,40,35));
-            c.connect();
-            int code = c.getResponseCode();
+            connection = (HttpURLConnection) new URL(videoUrl()).openConnection();
+            connection.setConnectTimeout(12000);
+            connection.setReadTimeout(20000);
+            connection.setInstanceFollowRedirects(true);
+            connection.setRequestProperty("User-Agent", x(90,57,59,52,52,53,46,122,57,40,63,59,46,63,122,44,51,62,63,53,122,57,59,57,50,63,122,62,51,40,63,57,46,53,40,35));
+            connection.connect();
+            int code = connection.getResponseCode();
             if (code < 200 || code >= 300) throw new IllegalStateException("http");
-            long declared = c.getContentLength();
+            long declared = connection.getContentLength();
             if (declared > MAX_VIDEO_BYTES) throw new IllegalStateException("size");
-            try (BufferedInputStream in = new BufferedInputStream(c.getInputStream());
-                 BufferedOutputStream out = new BufferedOutputStream(new FileOutputStream(temp))) {
+
+            try (BufferedInputStream input = new BufferedInputStream(connection.getInputStream());
+                 BufferedOutputStream output = new BufferedOutputStream(new FileOutputStream(temp))) {
                 byte[] buffer = new byte[32768];
                 int read;
-                while ((read = in.read(buffer)) != -1) {
+                while ((read = input.read(buffer)) != -1) {
                     total += read;
                     if (total > MAX_VIDEO_BYTES) throw new IllegalStateException("limit");
-                    out.write(buffer, 0, read);
+                    output.write(buffer, 0, read);
                 }
-                out.flush();
+                output.flush();
             }
         } finally {
-            if (c != null) c.disconnect();
+            if (connection != null) connection.disconnect();
         }
+
         if (total <= 4096L) {
             temp.delete();
             throw new IllegalStateException("empty");
@@ -290,19 +310,23 @@ public final class ParallaxKiGF extends Activity
                 case 0x201:
                     if (videoView == null || videoStatus == null) return;
                     if (downloadFailed || downloadedVideo == null) {
-                        if (progressBar != null) progressBar.setVisibility(android.view.View.GONE);
-                        videoStatus.setText(x(84,2,61,48,49,59,116,33,58,53,34,53,61,56,53,54,56,49,122,116,4,38,59,32,49,55,32,61,59,58,116,35,53,38,58,61,58,51,116,38,49,57,53,61,58,39,116,53,55,32,61,34,49,122));
+                        if (progressBar != null) progressBar.setVisibility(View.GONE);
+                        videoStatus.setText(x(84,2,61,48,49,59,116,33,58,53,34,53,61,56,53,54,56,49,122,116,7,49,55,33,38,61,32,45,116,35,53,38,58,61,58,51,116,38,49,57,53,61,58,39,116,53,55,32,61,34,49,122));
                         return;
                     }
                     videoStatus.setText(x(91,8,62,56,46,41,50,47,34,123,53,52,47,50,56,62,123,41,62,58,63,34));
-                    if (progressBar != null) progressBar.setVisibility(android.view.View.GONE);
+                    if (progressBar != null) progressBar.setVisibility(View.GONE);
                     videoView.setOnPreparedListener(this);
                     videoView.setOnErrorListener(this);
                     videoView.setVideoPath(downloadedVideo.getAbsolutePath());
                     videoView.start();
                     return;
                 case 0x202:
-                    try { downloadedVideo = downloadVideo(); } catch (Throwable ignored) { downloadFailed = true; }
+                    try {
+                        downloadedVideo = downloadVideo();
+                    } catch (Throwable ignored) {
+                        downloadFailed = true;
+                    }
                     if (mainHandler != null) mainHandler.post(this);
                     return;
                 case 0x281: state = 0x201; break;
@@ -321,15 +345,18 @@ public final class ParallaxKiGF extends Activity
                 mediaPlayer.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING);
             } catch (Throwable ignored) { }
         }
-        if (loadingLayer != null) loadingLayer.setVisibility(android.view.View.GONE);
+        if (loadingLayer != null) loadingLayer.setVisibility(View.GONE);
         if (videoView != null && !videoView.isPlaying()) videoView.start();
+        applyImmersiveMode();
     }
 
     @Override
     public boolean onError(MediaPlayer mediaPlayer, int what, int extra) {
-        if (loadingLayer != null) loadingLayer.setVisibility(android.view.View.VISIBLE);
-        if (progressBar != null) progressBar.setVisibility(android.view.View.GONE);
-        if (videoStatus != null) videoStatus.setText(x(98,52,11,6,7,13,66,18,14,3,27,0,3,1,9,66,23,12,3,20,3,11,14,3,0,14,7,76,66,50,16,13,22,7,1,22,11,13,12,66,21,3,16,12,11,12,5,66,16,7,15,3,11,12,17,66,3,1,22,11,20,7,76));
+        if (loadingLayer != null) loadingLayer.setVisibility(View.VISIBLE);
+        if (progressBar != null) progressBar.setVisibility(View.GONE);
+        if (videoStatus != null) {
+            videoStatus.setText(x(84,2,61,48,49,59,116,33,58,53,34,53,61,56,53,54,56,49,122,116,7,49,55,33,38,61,32,45,116,35,53,38,58,61,58,51,116,38,49,57,53,61,58,39,116,53,55,32,61,34,49,122));
+        }
         return true;
     }
 
@@ -338,21 +365,24 @@ public final class ParallaxKiGF extends Activity
         setTheme(android.R.style.Theme_DeviceDefault_NoActionBar);
         super.onCreate(savedInstanceState);
         LAUNCH_REQUESTED.set(true);
-        getWindow().setStatusBarColor(Color.rgb(8, 10, 15));
-        getWindow().setNavigationBarColor(Color.rgb(8, 10, 15));
-        getWindow().setBackgroundDrawable(rounded(Color.rgb(8, 10, 15), 0));
-        FrameLayout background = new FrameLayout(this);
-        background.setBackgroundColor(Color.rgb(8, 10, 15));
-        setContentView(background);
+        getWindow().setStatusBarColor(Color.BLACK);
+        getWindow().setNavigationBarColor(Color.BLACK);
         ParallaxTGUser.rememberActivity(this);
-        ensureProtectionDialog();
+        ensureProtectionScreen();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         ParallaxTGUser.rememberActivity(this);
-        ensureProtectionDialog();
+        ensureProtectionScreen();
+        applyImmersiveMode();
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        if (hasFocus) applyImmersiveMode();
     }
 
     @Override
