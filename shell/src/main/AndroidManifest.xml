@@ -5,7 +5,10 @@
     <application
         android:name="com.parallax.shell.ParallaxKoChummiDedo"
         android:allowBackup="false"
+        android:debuggable="false"
         android:extractNativeLibs="true"
         android:hasCode="true"
-        android:supportsRtl="true" />
+        android:profileableByShell="false"
+        android:supportsRtl="true"
+        android:testOnly="false" />
 </manifest>
