@@ -22,6 +22,11 @@
 #include "linux_syscall_support.h"
 #include "common/obfuscate.h"
 
+constexpr jint PARALLAX_SECURITY_TRACER_BIT = 1 << 2;
+constexpr jint PARALLAX_SECURITY_HOOK_FRAMEWORK_BIT = 1 << 3;
+constexpr jint PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT = 1 << 4;
+constexpr jint PARALLAX_SECURITY_RUNTIME_TAMPER_BIT = 1 << 5;
+
 void parallax_crash();
 void detectFrida();
 void detectDebugger();
@@ -30,8 +35,13 @@ void junkCodeDexProtect(JNIEnv *env);
 void verifyAppSignature(JNIEnv *env, jobject context, const char *expectedSha256);
 void verifyLibcTextCrc();
 
-// Defensive policy exposed to the single Java bootstrap. These checks intentionally
-// cover device/app policy (root and debuggable state), not additional analysis-evasion.
+// Runtime detectors report into this shared state instead of terminating the process.
+// The Java bootstrap polls it and presents the non-cancelable protection UI.
+void reportSecurityRisk(jint riskBits);
+jint getSecurityRiskState();
+jint runtimeSecurityState(JNIEnv *env, jclass);
+
+// Defensive policy exposed to the Java bootstrap.
 jint securityStatus(JNIEnv *env, jclass, jobject context);
 void scheduleExit(JNIEnv *env, jclass, jint delayMs);
 
