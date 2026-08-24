@@ -108,8 +108,10 @@ jobs:
           echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
           echo "- class definitions: ${CLASS_DEFS}" >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$CLASS_DEFS" -ne 6 ]; then
-            echo "Expected exactly six protection-stub class definitions, got ${CLASS_DEFS}" >&2
+          # Six source-level stub components are required; R8 may add a small number of
+          # synthetic classes (for desugaring/lambdas). Keep the resulting bootstrap tightly bounded.
+          if [ "$CLASS_DEFS" -lt 6 ] || [ "$CLASS_DEFS" -gt 16 ]; then
+            echo "Expected a compact protection bootstrap with 6-16 class definitions, got ${CLASS_DEFS}" >&2
             exit 1
           fi
 
