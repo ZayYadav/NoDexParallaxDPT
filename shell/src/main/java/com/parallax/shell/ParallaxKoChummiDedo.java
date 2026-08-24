@@ -1,13 +1,14 @@
 package com.parallax.shell;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.app.Application;
 import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 
 import com.parallax.parallax.BuildConfig;
 
@@ -18,23 +19,27 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 public final class ParallaxKoChummiDedo extends Application
-        implements Application.ActivityLifecycleCallbacks {
+        implements Application.ActivityLifecycleCallbacks, Runnable {
 
     private static final int SECURITY_ROOT = 1;
     private static final int SECURITY_DEBUGGABLE = 1 << 1;
     private static final int SECURITY_TRACER = 1 << 2;
     private static final int SECURITY_HOOK_FRAMEWORK = 1 << 3;
     private static final int SECURITY_PAYLOAD_TAMPER = 1 << 4;
+    private static final int SECURITY_RUNTIME_TAMPER = 1 << 5;
     private static final String ZIP_LIB_DIR = "ParallaxLoveU";
     private static final String SHELL_SO_NAME = BuildConfig.SO_NAME;
 
     private static volatile int flowNoise = 0x6D2B79F5;
+    private static volatile int securityReason;
     private static boolean classLoaderReady;
     private static boolean needRealApplication = true;
-    private static boolean protectionDialogShown;
-    private static int securityReason;
     private static String realApplicationName;
+    private static String realComponentFactoryName;
     private static Application realApplication;
+
+    private Handler protectionHandler;
+    private boolean protectionPolling;
 
     public static native void craoc(String appName);
     public static native void ia();
@@ -47,7 +52,20 @@ public final class ParallaxKoChummiDedo extends Application
     public static native Object ra(String appName);
     public static native void clinit();
     public static native int securityStatus(Context context);
+    public static native int runtimeSecurityState();
     public static native void scheduleExit(int delayMs);
+
+    static boolean isProtectionBlocked() {
+        return securityReason != 0;
+    }
+
+    static int getSecurityReason() {
+        return securityReason;
+    }
+
+    static String getRealComponentFactoryName() {
+        return realComponentFactoryName;
+    }
 
     private static int nextState(int realState, int decoyState) {
         int value = flowNoise;
@@ -131,9 +149,12 @@ public final class ParallaxKoChummiDedo extends Application
                     break;
                 case 0x55:
                     realApplicationName = rapn();
+                    realComponentFactoryName = rcf();
                     return;
                 case 0x66:
-                    // Fail closed before protected DEX/config loading on an unsafe runtime.
+                    // Fail closed without restoring protected DEX. The component factory
+                    // supplies blocked-mode stubs so Android can show the warning UI instead
+                    // of crashing on a missing original component class.
                     return;
                 case 0x71:
                 case 0x72:
@@ -184,38 +205,56 @@ public final class ParallaxKoChummiDedo extends Application
         }
     }
 
-    private static String protectionMessage() {
+    static String protectionMessage() {
         int reason = securityReason;
         if ((reason & SECURITY_PAYLOAD_TAMPER) != 0) {
-            return "Protected code integrity verification failed. This protected app will close in 6 seconds.";
+            return "Protected code integrity verification failed. Protected DEX remains locked.";
         }
         if ((reason & SECURITY_ROOT) != 0) {
-            return "Rooted or modified device detected. This protected app will close in 6 seconds.";
+            return "Rooted or modified device detected. Protected DEX remains locked.";
         }
         if ((reason & SECURITY_HOOK_FRAMEWORK) != 0) {
-            return "Hook/instrumentation framework detected. This protected app will close in 6 seconds.";
+            return "Hook or instrumentation framework detected. Protected DEX remains locked.";
         }
         if ((reason & SECURITY_TRACER) != 0) {
-            return "Debugger/tracer detected. This protected app will close in 6 seconds.";
+            return "Debugger or tracer detected. Protected DEX remains locked.";
         }
         if ((reason & SECURITY_DEBUGGABLE) != 0) {
-            return "Debuggable app state detected. This protected app will close in 6 seconds.";
+            return "Debuggable application state detected. Protected DEX remains locked.";
         }
-        return "Application integrity check failed. This protected app will close in 6 seconds.";
+        if ((reason & SECURITY_RUNTIME_TAMPER) != 0) {
+            return "Runtime integrity changed after launch. Protected session is blocked.";
+        }
+        return "Application security policy failed. Protected code remains locked.";
     }
 
-    private static void showProtectionDialog(Activity activity) {
-        if (securityReason == 0 || protectionDialogShown || activity == null || activity.isFinishing()) {
+    private void startProtectionPolling() {
+        if (protectionPolling) {
             return;
         }
-        protectionDialogShown = true;
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-                .setTitle("Parallax Protection")
-                .setMessage(protectionMessage())
-                .setCancelable(false)
-                .create();
-        dialog.setCanceledOnTouchOutside(false);
-        dialog.show();
+        protectionPolling = true;
+        protectionHandler = new Handler(Looper.getMainLooper());
+        protectionHandler.postDelayed(this, 900L);
+    }
+
+    @Override
+    public void run() {
+        if (!protectionPolling || protectionHandler == null) {
+            return;
+        }
+        try {
+            int runtimeState = runtimeSecurityState();
+            if (runtimeState != 0) {
+                securityReason |= runtimeState;
+                Activity activity = ParallaxProtectionFactory.peekActivity();
+                if (activity != null) {
+                    ParallaxProtectionActivity.request(activity);
+                }
+            }
+        } catch (Throwable ignored) {
+            // A warning-path failure must never terminate the application process.
+        }
+        protectionHandler.postDelayed(this, 1000L);
     }
 
     @Override
@@ -227,12 +266,15 @@ public final class ParallaxKoChummiDedo extends Application
     @Override
     public void onCreate() {
         super.onCreate();
+        registerActivityLifecycleCallbacks(this);
+        startProtectionPolling();
+
         int state = securityReason != 0 ? nextState(0xC1, 0xD1) : nextState(0xC2, 0xD2);
         for (;;) {
             switch (state) {
                 case 0xC1:
-                    registerActivityLifecycleCallbacks(this);
-                    scheduleExit(6000);
+                    // No kill timer. Blocked-mode components keep the process alive long
+                    // enough to present the non-cancelable Parallax Protection warning.
                     return;
                 case 0xC2:
                     replaceApplication();
@@ -269,19 +311,26 @@ public final class ParallaxKoChummiDedo extends Application
         return super.getPackageName();
     }
 
+    private static void onProtectionActivity(Activity activity) {
+        ParallaxProtectionFactory.rememberActivity(activity);
+        if (securityReason != 0) {
+            ParallaxProtectionActivity.request(activity);
+        }
+    }
+
     @Override
     public void onActivityPreCreated(Activity activity, Bundle savedInstanceState) {
-        showProtectionDialog(activity);
+        onProtectionActivity(activity);
     }
 
     @Override
     public void onActivityCreated(Activity activity, Bundle savedInstanceState) {
-        showProtectionDialog(activity);
+        onProtectionActivity(activity);
     }
 
     @Override
     public void onActivityResumed(Activity activity) {
-        showProtectionDialog(activity);
+        onProtectionActivity(activity);
     }
 
     @Override
