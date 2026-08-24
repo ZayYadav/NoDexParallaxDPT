@@ -11,6 +11,12 @@ on:
       - 'parallax/**'
       - 'P.apk'
       - '.github/workflows/protect-p-apk.yml'
+  pull_request:
+    paths:
+      - 'shell/**'
+      - 'parallax/**'
+      - 'P.apk'
+      - '.github/workflows/protect-p-apk.yml'
 
 permissions:
   contents: read
