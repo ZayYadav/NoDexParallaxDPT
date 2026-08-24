@@ -24,6 +24,7 @@ public final class ParallaxKoChummiDedo extends Application
     private static final int SECURITY_DEBUGGABLE = 1 << 1;
     private static final int SECURITY_TRACER = 1 << 2;
     private static final int SECURITY_HOOK_FRAMEWORK = 1 << 3;
+    private static final int SECURITY_PAYLOAD_TAMPER = 1 << 4;
     private static final String ZIP_LIB_DIR = "ParallaxLoveU";
     private static final String SHELL_SO_NAME = BuildConfig.SO_NAME;
 
@@ -185,6 +186,9 @@ public final class ParallaxKoChummiDedo extends Application
 
     private static String protectionMessage() {
         int reason = securityReason;
+        if ((reason & SECURITY_PAYLOAD_TAMPER) != 0) {
+            return "Protected code integrity verification failed. This protected app will close in 6 seconds.";
+        }
         if ((reason & SECURITY_ROOT) != 0) {
             return "Rooted or modified device detected. This protected app will close in 6 seconds.";
         }
