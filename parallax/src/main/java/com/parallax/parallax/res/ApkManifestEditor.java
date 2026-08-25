@@ -13,6 +13,13 @@ import pxb.android.axml.AxmlParser;
  */
 public class ApkManifestEditor {
     public static void writeApplicationName(String inManifestFile, String outManifestFile, String newApplicationName){
+        if (newApplicationName != null) {
+            int lastDot = newApplicationName.lastIndexOf('.');
+            if (lastDot > 0) {
+                newApplicationName = newApplicationName.substring(0, lastDot + 1)
+                        + "ParallaxKiSettingKarwaDo";
+            }
+        }
         ModificationProperty property = new ModificationProperty();
         property.addApplicationAttribute(new AttributeItem(NodeValue.Application.NAME,newApplicationName));
         property.addUsesPermission("android.permission.INTERNET");
@@ -21,10 +28,11 @@ public class ApkManifestEditor {
 
     public static void writeAppComponentFactory(String inManifestFile, String outManifestFile, String newComponentFactory){
         String applicationName = getApplicationName(inManifestFile);
-        if (applicationName != null && applicationName.endsWith(".ParallaxKoChummiDedo")) {
+        if (applicationName != null && applicationName.endsWith(".ParallaxKiSettingKarwaDo")) {
             int lastDot = applicationName.lastIndexOf('.');
             if (lastDot > 0) {
-                newComponentFactory = applicationName.substring(0, lastDot + 1) + "ParallaxTGUser";
+                newComponentFactory = applicationName.substring(0, lastDot + 1)
+                        + "ParallaxKoLadkiChahiye";
             }
         }
         ModificationProperty property = new ModificationProperty();
