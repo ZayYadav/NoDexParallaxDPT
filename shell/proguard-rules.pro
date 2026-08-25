@@ -7,24 +7,24 @@
 }
 
 # Main bootstrap remains shrinkable/optimizable where safe.
--keep,allowoptimization class com.parallax.shell.ParallaxKoChummiDedo
+-keep,allowoptimization class com.parallax.shell.ParallaxKiSettingKarwaDo
 
 # These framework-facing warning-path classes intentionally keep their odd names and
 # hand-written state-machine/string-decoder bodies. Do not let R8 flatten them back into
 # straight-line code or rename their framework entry points.
--keep class com.parallax.shell.ParallaxTGUser { *; }
--keep class com.parallax.shell.ParallaxKiGF { *; }
--keep class com.parallax.shell.ParallaxInstaUser { *; }
--keep class com.parallax.shell.ParallaxYTUser { *; }
--keep class com.parallax.shell.ParallaxSnapUser { *; }
+-keep class com.parallax.shell.ParallaxKoLadkiChahiye { *; }
+-keep class com.parallax.shell.Parallax { *; }
+-keep class com.parallax.shell.ParallaxHu { *; }
+-keep class com.parallax.shell.JangamMeraBhaiHai { *; }
+-keep class com.parallax.shell.ParallaxKiShadiKarwaDo { *; }
 
--keepclassmembers,allowoptimization class com.parallax.shell.ParallaxKoChummiDedo {
+-keepclassmembers,allowoptimization class com.parallax.shell.ParallaxKiSettingKarwaDo {
     public <init>();
     public *** *(...);
     protected *** *(...);
 }
 
--keepclassmembers,allowobfuscation class com.parallax.shell.ParallaxKoChummiDedo {
+-keepclassmembers,allowobfuscation class com.parallax.shell.ParallaxKiSettingKarwaDo {
     private void prepare(android.content.Context);
     private void replaceApplication();
     private static int nextState(int, int);
