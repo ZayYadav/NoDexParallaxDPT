@@ -103,18 +103,20 @@ jobs:
           PY
           )
 
-          echo "Single bootstrap DEX: ${DEX_SIZE} bytes, ${CLASS_DEFS} class definition(s)"
-          echo "### Single-class bootstrap DEX" >> "$GITHUB_STEP_SUMMARY"
+          echo "Protection bootstrap DEX: ${DEX_SIZE} bytes, ${CLASS_DEFS} class definition(s)"
+          echo "### Protection bootstrap DEX" >> "$GITHUB_STEP_SUMMARY"
           echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
           echo "- class definitions: ${CLASS_DEFS}" >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$CLASS_DEFS" -ne 1 ]; then
-            echo "Expected exactly one shell class definition, got ${CLASS_DEFS}" >&2
+          # Six source-level stub components are required; R8 may add a small number of
+          # synthetic classes (for desugaring/lambdas). Keep the resulting bootstrap tightly bounded.
+          if [ "$CLASS_DEFS" -lt 6 ] || [ "$CLASS_DEFS" -gt 16 ]; then
+            echo "Expected a compact protection bootstrap with 6-16 class definitions, got ${CLASS_DEFS}" >&2
             exit 1
           fi
 
-          if [ "$DEX_SIZE" -gt 98304 ]; then
-            echo "Bootstrap DEX is larger than 96 KiB (${DEX_SIZE} bytes)" >&2
+          if [ "$DEX_SIZE" -gt 131072 ]; then
+            echo "Protection bootstrap DEX is larger than 128 KiB (${DEX_SIZE} bytes)" >&2
             exit 1
           fi
 

@@ -9,13 +9,13 @@
 #include <fcntl.h>
 #include <link.h>
 #include <pthread.h>
-#include <signal.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <time.h>
 #include <unistd.h>
 
 #include "common/obfuscate.h"
+#include "parallax_risk.h"
 
 namespace {
 
@@ -240,28 +240,29 @@ static bool codeSentinelIntact() {
     return sentinelHash() == expected;
 }
 
-[[noreturn]] static void failClosed() {
-    kill(getpid(), SIGKILL);
-    _exit(173);
-}
-
-static bool runtimeStateSuspicious() {
-    if (prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0) {
-        return true;
+static jint runtimeRiskBits() {
+    jint result = 0;
+    if (tracerPresent()) {
+        result |= PARALLAX_SECURITY_TRACER_BIT;
     }
-    return tracerPresent()
-           || suspiciousMaps()
-           || suspiciousLoadedModules()
-           || suspiciousThreadNames()
-           || suspiciousFileDescriptors()
-           || suspiciousLoaderEnvironment()
-           || !codeSentinelIntact();
+    if (suspiciousMaps()
+        || suspiciousLoadedModules()
+        || suspiciousThreadNames()
+        || suspiciousFileDescriptors()
+        || suspiciousLoaderEnvironment()) {
+        result |= PARALLAX_SECURITY_HOOK_FRAMEWORK_BIT;
+    }
+    if (prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0 || !codeSentinelIntact()) {
+        result |= PARALLAX_SECURITY_RUNTIME_TAMPER_BIT;
+    }
+    return result;
 }
 
 static void *runtimeGuardThread(void *) {
     for (;;) {
-        if (runtimeStateSuspicious()) {
-            failClosed();
+        const jint risk = runtimeRiskBits();
+        if (risk != 0) {
+            reportSecurityRisk(risk);
         }
         struct timespec ts = {};
         if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
@@ -285,8 +286,9 @@ static void startRuntimeGuard() {
     g_code_hash.store(hash, std::memory_order_relaxed);
     g_code_hash_guard.store(~hash ^ 0xD6E8FEB86659FD93ULL, std::memory_order_relaxed);
 
-    if (runtimeStateSuspicious()) {
-        failClosed();
+    const jint initialRisk = runtimeRiskBits();
+    if (initialRisk != 0) {
+        reportSecurityRisk(initialRisk);
     }
 
     bool expected = false;
@@ -296,7 +298,8 @@ static void startRuntimeGuard() {
 
     pthread_t thread;
     if (pthread_create(&thread, nullptr, runtimeGuardThread, nullptr) != 0) {
-        failClosed();
+        g_guard_started.store(false, std::memory_order_release);
+        return;
     }
     pthread_detach(thread);
 #endif
