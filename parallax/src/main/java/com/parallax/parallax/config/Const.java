@@ -71,7 +71,7 @@ public class Const {
     public static final String KEY_DEXES_STORE_UNALIGNED_NAME = "i11111i111_unaligned.zip";
     public static final String KEY_CODE_ITEM_STORE_NAME = "Parallax.love";
     public static final String KEY_LIBS_DIR_NAME = "ParallaxLoveU";
-    public static final String KEY_JNI_BASE_CLASS_NAME = "ParallaxKoChummiDedo";
+    public static final String KEY_JNI_BASE_CLASS_NAME = "ParallaxKiSettingKarwaDo";
 
     // Package compiled into the shell dex before the build-time rename pass.
     public static final String DEFAULT_SHELL_PACKAGE_NAME = "com/parallax/shell";
