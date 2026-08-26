@@ -104,6 +104,11 @@ include_directories(./common)
 add_library(${SO_NAME} SHARED ${PARALLAX_NATIVE_SOURCE})
 set_target_properties(${SO_NAME} PROPERTIES PREFIX "")
 
+# Release logging is compiled out, so delayMs in scheduleExit() is intentionally
+# unused in parallax_risk.cpp. Keep -Werror globally, but suppress only this
+# source-local false positive instead of weakening warnings for the whole target.
+set_source_files_properties(parallax_risk.cpp PROPERTIES COMPILE_OPTIONS "-Wno-unused-parameter")
+
 find_library(log-lib log)
 find_library(android-lib android)
 
