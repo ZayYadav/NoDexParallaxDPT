@@ -76,7 +76,9 @@ bool decryptRuntimeBitcode() {
     return true;
 }
 
-__attribute__((constructor)) void parallaxBootstrapInit() {
+// Priority 101 is the earliest application-defined constructor priority. Decrypt before
+// the default-priority hardening/runtime constructors can enter protected helper code.
+__attribute__((constructor(101))) void parallaxBootstrapInit() {
     // JNI_OnLoad and the DEX restoration routines live in the encrypted .bitcode section,
     // so decryption must complete before the dynamic linker can enter JNI_OnLoad.
     if (!decryptRuntimeBitcode()) {

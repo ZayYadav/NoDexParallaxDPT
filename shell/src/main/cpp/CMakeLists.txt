@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.31.1)
 project("parallax")
 
 set(PARALLAX_NATIVE_SOURCE
+        parallax_bootstrap.cpp
         parallax.cpp
         parallax_hook.cpp
         parallax_jni.cpp

@@ -17,10 +17,6 @@ inline int get_cache_page_size() {
 
 #define SECTION(name) __attribute__ ((section(name)))
 #define KEEP_SYMBOL __attribute__((visibility("default")))
-// The legacy init_parallax() function is intentionally no longer registered directly
-// in .init_array. parallax_bootstrap.cpp owns initialization so encrypted code is
-// decrypted with a W^X-safe RW -> RX transition before any .bitcode routine executes.
-#define INIT_ARRAY_SECTION
 #define ALWAYS_INLINE static inline __attribute__((always_inline))
 #define NO_INLINE __attribute__((noinline))
 #define SYS_INLINE ALWAYS_INLINE
