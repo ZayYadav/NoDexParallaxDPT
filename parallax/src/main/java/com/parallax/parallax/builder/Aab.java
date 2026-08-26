@@ -1,5 +1,6 @@
 package com.parallax.parallax.builder;
 
+import com.parallax.parallax.config.Const;
 import com.parallax.parallax.config.ShellConfig;
 import com.parallax.parallax.res.AabManifestEditor;
 import com.parallax.parallax.util.FileUtils;
@@ -29,12 +30,16 @@ public class Aab extends AndroidPackage {
 
     @Override
     public String getProxyApplicationName() {
-        return String.format(Locale.US, "%s.%s", ShellConfig.getInstance().getShellPackageName(), "ParallaxKoChummiDedo");
+        return String.format(Locale.US, "%s.%s",
+                ShellConfig.getInstance().getShellPackageName(),
+                Const.KEY_JNI_BASE_CLASS_NAME);
     }
 
     @Override
     public String getProxyComponentFactory() {
-        return "android.app.AppComponentFactory";
+        return String.format(Locale.US, "%s.%s",
+                ShellConfig.getInstance().getShellPackageName(),
+                "ParallaxKoLadkiChahiye");
     }
 
     @Override
