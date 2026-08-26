@@ -54,4 +54,17 @@ public class NativeBootstrapSourceTest {
         assertFalse(nativeSources.contains("PROT_READ | PROT_WRITE | PROT_EXEC"));
         assertFalse(nativeSources.contains("void init_parallax()"));
     }
+
+    @Test
+    public void jniFailuresAlwaysClearPendingExceptionsBeforeNullChecks() throws IOException {
+        String jni = read("shell/src/main/cpp/parallax_jni.cpp");
+        String nativeSources = jni
+                + read("shell/src/main/cpp/parallax.cpp")
+                + read("shell/src/main/cpp/parallax_risk.cpp");
+        assertFalse(jni.matches("(?s).*\\w+\\s*==\\s*nullptr\\s*\\|\\|\\s*clearPendingException.*"));
+        assertFalse(nativeSources.matches(
+                "(?s).*\\w+\\s*==\\s*nullptr\\s*\\|\\|\\s*env->ExceptionCheck\\(\\).*"));
+        assertTrue(jni.contains("clearPendingException(env) || klass == nullptr"));
+        assertTrue(jni.contains("clearPendingException(env) || methodId == nullptr"));
+    }
 }

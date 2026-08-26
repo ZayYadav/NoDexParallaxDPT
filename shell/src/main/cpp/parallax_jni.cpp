@@ -43,12 +43,12 @@ jobject GetObjectField(JNIEnv *env, jobject obj, const char *field_name, const c
         return nullptr;
     }
     jclass klass = env->GetObjectClass(obj);
-    if (klass == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || klass == nullptr) {
         DeleteLocalRef(env, klass);
         return nullptr;
     }
     jfieldID fid = env->GetFieldID(klass, field_name, sig);
-    if (fid == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || fid == nullptr) {
         DeleteLocalRef(env, klass);
         return nullptr;
     }
@@ -71,7 +71,7 @@ jobject GetStaticObjectField(JNIEnv *env, jclass klass, const char *field_name, 
         return nullptr;
     }
     jfieldID fid = env->GetStaticFieldID(klass, field_name, sig);
-    if (fid == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || fid == nullptr) {
         return nullptr;
     }
     jobject value = env->GetStaticObjectField(klass, fid);
@@ -92,12 +92,12 @@ void SetObjectField(JNIEnv *env, jobject obj, const char *field_name, const char
         return;
     }
     jclass klass = env->GetObjectClass(obj);
-    if (klass == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || klass == nullptr) {
         DeleteLocalRef(env, klass);
         return;
     }
     jfieldID fid = env->GetFieldID(klass, field_name, sig);
-    if (fid == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || fid == nullptr) {
         DeleteLocalRef(env, klass);
         return;
     }
@@ -120,7 +120,7 @@ void SetStaticObjectField(JNIEnv *env, jclass klass, const char *field_name, con
         return;
     }
     jfieldID fid = env->GetStaticFieldID(klass, field_name, sig);
-    if (fid == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || fid == nullptr) {
         return;
     }
     env->SetStaticObjectField(klass, fid, value);
@@ -132,7 +132,7 @@ jclass FindClass(JNIEnv *env, const char *class_name) {
         return nullptr;
     }
     jclass cls = env->FindClass(class_name);
-    if (cls == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || cls == nullptr) {
         return nullptr;
     }
     return cls;
@@ -143,14 +143,14 @@ jobject NewObject(JNIEnv *env, jclass klass, const char *sig, ...) {
         return nullptr;
     }
     jmethodID methodId = env->GetMethodID(klass, "<init>", sig);
-    if (methodId == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || methodId == nullptr) {
         return nullptr;
     }
     va_list args;
     va_start(args, sig);
     jobject obj = env->NewObjectV(klass, methodId, args);
     va_end(args);
-    if (obj == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || obj == nullptr) {
         return nullptr;
     }
     return obj;
@@ -161,12 +161,12 @@ jobject CallObjectMethod(JNIEnv *env, jobject obj, const char *name, const char 
         return nullptr;
     }
     jclass klass = env->GetObjectClass(obj);
-    if (klass == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || klass == nullptr) {
         DeleteLocalRef(env, klass);
         return nullptr;
     }
     jmethodID methodId = env->GetMethodID(klass, name, sig);
-    if (methodId == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || methodId == nullptr) {
         DeleteLocalRef(env, klass);
         return nullptr;
     }
@@ -186,7 +186,7 @@ jobject CallStaticObjectMethod(JNIEnv *env, jclass cls, const char *name, const 
         return nullptr;
     }
     jmethodID methodId = env->GetStaticMethodID(cls, name, sig);
-    if (methodId == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || methodId == nullptr) {
         return nullptr;
     }
     va_list args;
@@ -205,12 +205,12 @@ jint CallIntMethod(JNIEnv *env, jobject obj, const char *name, const char *sig,
         return defVal;
     }
     jclass klass = env->GetObjectClass(obj);
-    if (klass == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || klass == nullptr) {
         DeleteLocalRef(env, klass);
         return defVal;
     }
     jmethodID methodId = env->GetMethodID(klass, name, sig);
-    if (methodId == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || methodId == nullptr) {
         DeleteLocalRef(env, klass);
         return defVal;
     }
@@ -232,12 +232,12 @@ jboolean CallBooleanMethod(JNIEnv *env, jobject obj, const char *name, const cha
         return fallback;
     }
     jclass klass = env->GetObjectClass(obj);
-    if (klass == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || klass == nullptr) {
         DeleteLocalRef(env, klass);
         return fallback;
     }
     jmethodID methodId = env->GetMethodID(klass, name, sig);
-    if (methodId == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || methodId == nullptr) {
         DeleteLocalRef(env, klass);
         return fallback;
     }
@@ -257,12 +257,12 @@ void CallVoidMethod(JNIEnv *env, jobject obj, const char *name, const char *sig,
         return;
     }
     jclass klass = env->GetObjectClass(obj);
-    if (klass == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || klass == nullptr) {
         DeleteLocalRef(env, klass);
         return;
     }
     jmethodID methodId = env->GetMethodID(klass, name, sig);
-    if (methodId == nullptr || clearPendingException(env)) {
+    if (clearPendingException(env) || methodId == nullptr) {
         DeleteLocalRef(env, klass);
         return;
     }

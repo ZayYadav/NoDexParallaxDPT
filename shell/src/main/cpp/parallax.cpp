@@ -131,7 +131,7 @@ PARALLAX_ENCRYPT static jobjectArray makeInMemoryDexElements(JNIEnv *env, jobjec
             return nullptr;
         }
         jobject imcl = env->NewObject(imclClass, ctor, buffers, targetClassLoader);
-        if (imcl == nullptr || env->ExceptionCheck()) {
+        if (env->ExceptionCheck() || imcl == nullptr) {
             env->ExceptionDescribe();
             env->ExceptionClear();
             DLOGE("create InMemoryDexClassLoader failed");
@@ -159,7 +159,7 @@ PARALLAX_ENCRYPT static jobjectArray makeInMemoryDexElements(JNIEnv *env, jobjec
                 return nullptr;
             }
             jobject imcl = env->NewObject(imclClass, ctor, bb, targetClassLoader);
-            if (imcl == nullptr || env->ExceptionCheck()) {
+            if (env->ExceptionCheck() || imcl == nullptr) {
                 env->ExceptionDescribe();
                 env->ExceptionClear();
                 DLOGE("create InMemoryDexClassLoader failed at %zu", i);

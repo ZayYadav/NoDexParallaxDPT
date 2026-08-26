@@ -149,14 +149,14 @@ static bool isApplicationDebuggable(JNIEnv *env, jobject context) {
     }
 
     jclass appInfoClass = env->GetObjectClass(appInfo);
-    if (appInfoClass == nullptr || env->ExceptionCheck()) {
+    if (env->ExceptionCheck() || appInfoClass == nullptr) {
         env->ExceptionClear();
         parallax::jni::DeleteLocalRef(env, appInfo);
         return false;
     }
 
     jfieldID flagsField = env->GetFieldID(appInfoClass, "flags", "I");
-    if (flagsField == nullptr || env->ExceptionCheck()) {
+    if (env->ExceptionCheck() || flagsField == nullptr) {
         env->ExceptionClear();
         parallax::jni::DeleteLocalRef(env, appInfoClass);
         parallax::jni::DeleteLocalRef(env, appInfo);
