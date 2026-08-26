@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - 'hard/**'
+      - 'fix/**'
     paths:
       - 'shell/**'
       - 'parallax/**'
@@ -145,6 +146,49 @@ jobs:
           echo "- Source: main/P.apk" >> "$GITHUB_STEP_SUMMARY"
           echo "- Output: P-Parallax-Protected.apk" >> "$GITHUB_STEP_SUMMARY"
           echo "- Size: $(stat -c '%s' "$FINAL_DIR/P-Parallax-Protected.apk") bytes" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify protected startup bootstrap wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$GITHUB_WORKSPACE/protected-artifact/P-Parallax-Protected.apk"
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          MANIFEST_DUMP="$RUNNER_TEMP/protected-manifest.txt"
+          DEX_STRINGS="$RUNNER_TEMP/protected-dex-strings.txt"
+
+          "$AAPT2" dump xmltree "$APK" --file AndroidManifest.xml > "$MANIFEST_DUMP"
+          unzip -p "$APK" classes.dex | strings > "$DEX_STRINGS"
+
+          EXPECTED_APP="com.parallax.protection.ParallaxKiSettingKarwaDo"
+          EXPECTED_FACTORY="com.parallax.protection.ParallaxKoLadkiChahiye"
+
+          grep -Fq "$EXPECTED_APP" "$MANIFEST_DUMP" || {
+            echo "Protected manifest does not point to the current bootstrap Application: $EXPECTED_APP" >&2
+            cat "$MANIFEST_DUMP" >&2
+            exit 1
+          }
+          grep -Fq "$EXPECTED_FACTORY" "$MANIFEST_DUMP" || {
+            echo "Protected manifest does not point to the current component factory: $EXPECTED_FACTORY" >&2
+            cat "$MANIFEST_DUMP" >&2
+            exit 1
+          }
+          if grep -Fq "ParallaxKoChummiDedo" "$MANIFEST_DUMP" "$DEX_STRINGS"; then
+            echo "Legacy bootstrap class name leaked into protected APK" >&2
+            exit 1
+          fi
+
+          grep -Fq "ParallaxKiSettingKarwaDo" "$DEX_STRINGS" || {
+            echo "Bootstrap Application class is absent from classes.dex" >&2
+            exit 1
+          }
+          grep -Fq "ParallaxKoLadkiChahiye" "$DEX_STRINGS" || {
+            echo "Bootstrap component factory is absent from classes.dex" >&2
+            exit 1
+          }
+
+          echo "- Bootstrap Application: $EXPECTED_APP" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Component factory: $EXPECTED_FACTORY" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Legacy bootstrap name: absent" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload protected APK
         uses: actions/upload-artifact@v4
