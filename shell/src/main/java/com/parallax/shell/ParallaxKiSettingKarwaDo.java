@@ -82,9 +82,13 @@ public final class ParallaxKiSettingKarwaDo extends Application
     }
 
     private static String abiDirName() {
-        String abi = Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0
-                ? Build.SUPPORTED_ABIS[0] : Build.CPU_ABI;
-        if (abi == null) return "arm64";
+        // Select the shell ABI for the current process, not the device's first supported
+        // ABI. A 64-bit ARM phone can legitimately launch a 32-bit-only protected app.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            return android.os.Process.is64Bit() ? "arm64" : "arm";
+        }
+        String abi = Build.CPU_ABI;
+        if (abi == null) return "arm";
         if (abi.startsWith("arm64")) return "arm64";
         if (abi.startsWith("armeabi")) return "arm";
         return abi;
@@ -96,19 +100,34 @@ public final class ParallaxKiSettingKarwaDo extends Application
             throw new IllegalStateException("cannot create shell directory");
         }
         File out = new File(outDir, SHELL_SO_NAME);
+        File temp = new File(outDir, "." + SHELL_SO_NAME + "."
+                + android.os.Process.myPid() + "." + Thread.currentThread().getId() + ".tmp");
         String entryName = "assets/" + ZIP_LIB_DIR + "/" + abiDirName() + "/" + SHELL_SO_NAME;
         try (ZipFile zip = new ZipFile(sourceDir)) {
             ZipEntry entry = zip.getEntry(entryName);
-            if (entry == null) throw new IllegalStateException("missing shell library");
+            if (entry == null) {
+                throw new IllegalStateException("missing shell library for process ABI: " + abiDirName());
+            }
             try (InputStream in = zip.getInputStream(entry);
-                 FileOutputStream output = new FileOutputStream(out, false)) {
+                 FileOutputStream output = new FileOutputStream(temp, false)) {
                 byte[] buffer = new byte[16384];
                 int read;
-                while ((read = in.read(buffer)) != -1) output.write(buffer, 0, read);
+                while ((read = in.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                }
+                output.flush();
+                output.getFD().sync();
+            }
+            // Same-directory rename is atomic on Android/Linux. This avoids one process
+            // observing a partially-written library while another process is starting.
+            if (!temp.renameTo(out)) {
+                throw new IllegalStateException("cannot publish shell library atomically");
             }
             return out;
         } catch (Exception e) {
             throw new IllegalStateException("cannot extract shell library", e);
+        } finally {
+            if (temp.exists()) temp.delete();
         }
     }
 
