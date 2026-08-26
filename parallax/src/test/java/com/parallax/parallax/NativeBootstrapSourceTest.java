@@ -36,6 +36,18 @@ public class NativeBootstrapSourceTest {
     }
 
     @Test
+    public void encryptedCodeIsIsolatedFromTextAndPltPages() throws IOException {
+        String cmake = read("shell/src/main/cpp/CMakeLists.txt");
+        String linkerScript = read("shell/src/main/cpp/parallax_sections.ld");
+
+        assertTrue(cmake.contains("--script=${CMAKE_CURRENT_SOURCE_DIR}/parallax_sections.ld"));
+        assertTrue(cmake.contains("LINK_DEPENDS"));
+        assertTrue(linkerScript.contains(".bitcode ALIGN(0x4000)"));
+        assertTrue(linkerScript.contains(". = ALIGN(0x4000);"));
+        assertTrue(linkerScript.contains("INSERT AFTER .text"));
+    }
+
+    @Test
     public void bootstrapUsesRuntimeAddressAndWxTransition() throws IOException {
         String bootstrap = read("shell/src/main/cpp/parallax_bootstrap.cpp");
         assertTrue(bootstrap.contains("__attribute__((constructor(101)))"));
@@ -66,5 +78,23 @@ public class NativeBootstrapSourceTest {
                 "(?s).*\\w+\\s*==\\s*nullptr\\s*\\|\\|\\s*env->ExceptionCheck\\(\\).*"));
         assertTrue(jni.contains("clearPendingException(env) || klass == nullptr"));
         assertTrue(jni.contains("clearPendingException(env) || methodId == nullptr"));
+    }
+
+    @Test
+    public void componentFactoryBootstrapsBeforeInstantiatingRealApplication() throws IOException {
+        String application = read(
+                "shell/src/main/java/com/parallax/shell/ParallaxKiSettingKarwaDo.java");
+        String factory = read(
+                "shell/src/main/java/com/parallax/shell/ParallaxKoLadkiChahiye.java");
+
+        assertTrue(application.contains(
+                "static boolean prepareClassLoader(ClassLoader classLoader, ApplicationInfo info)"));
+        assertTrue(application.indexOf("\n            ia();")
+                < application.indexOf("\n            cbde(classLoader);"));
+        assertTrue(factory.contains(
+                "ParallaxKiSettingKarwaDo.prepareClassLoader(cl, aInfo);"));
+        assertTrue(factory.contains("resolveApplicationName(cl)"));
+        assertTrue(factory.contains("delegate.instantiateApplication(cl, applicationName)"));
+        assertTrue(factory.contains("super.instantiateApplication(cl, applicationName)"));
     }
 }

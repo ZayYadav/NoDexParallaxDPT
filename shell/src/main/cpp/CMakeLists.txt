@@ -120,7 +120,11 @@ target_compile_options(${SO_NAME} PRIVATE
         -Wformat
         -Wformat-security
 )
-target_link_options(${SO_NAME} PRIVATE "-Wl,-z,max-page-size=16384")
+target_link_options(${SO_NAME} PRIVATE
+        "-Wl,-z,max-page-size=16384"
+        "-Wl,--script=${CMAKE_CURRENT_SOURCE_DIR}/parallax_sections.ld")
+set_property(TARGET ${SO_NAME} APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/parallax_sections.ld")
 
 target_link_libraries(${SO_NAME}
         ${log-lib}

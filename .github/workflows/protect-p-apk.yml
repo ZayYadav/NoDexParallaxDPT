@@ -116,6 +116,40 @@ jobs:
               echo "Writable-executable load segment found in $SO" >&2
               exit 1
             fi
+            python3 - "$READELF" "$SO" <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          readelf, so_path = sys.argv[1:]
+          output = subprocess.check_output(
+              [readelf, "--sections", "--wide", so_path], text=True)
+          sections = {}
+          pattern = re.compile(
+              r"^\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-fA-F]+)\s+"
+              r"[0-9a-fA-F]+\s+([0-9a-fA-F]+)\s")
+          for line in output.splitlines():
+              match = pattern.match(line)
+              if match:
+                  sections[match.group(1)] = (
+                      int(match.group(2), 16), int(match.group(3), 16))
+
+          bitcode_address, bitcode_size = sections[".bitcode"]
+          plt_address, _ = sections[".plt"]
+          page_size = 0x4000
+          bitcode_end = bitcode_address + bitcode_size
+          if bitcode_address % page_size or bitcode_end % page_size:
+              raise SystemExit(
+                  f".bitcode is not isolated on 16 KiB pages in {so_path}: "
+                  f"address=0x{bitcode_address:x}, end=0x{bitcode_end:x}")
+          if plt_address < bitcode_end:
+              raise SystemExit(
+                  f".plt overlaps the writable decryption range in {so_path}: "
+                  f"plt=0x{plt_address:x}, bitcode_end=0x{bitcode_end:x}")
+          print(
+              f"Verified isolated .bitcode pages in {so_path}: "
+              f"0x{bitcode_address:x}-0x{bitcode_end:x}")
+          PY
           done
 
       - name: Extract P.apk from main
