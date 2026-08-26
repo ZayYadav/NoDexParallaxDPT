@@ -37,7 +37,7 @@ jobs:
           "$AAPT2" dump xmltree P.apk --file AndroidManifest.xml > "$DUMP"
 
           echo '=== PACKAGE ==='
-          "$AAPT2" dump badging P.apk | head -n 5
+          "$AAPT2" dump badging P.apk | sed -n '1,5p'
 
           echo '=== APPLICATION ATTRIBUTES ==='
           awk '
@@ -46,8 +46,41 @@ jobs:
             in_app && /^[[:space:]]*E:/ { exit }
           ' "$DUMP"
 
-          echo '=== FIRST STARTUP COMPONENTS ==='
-          grep -n -E 'E: provider|E: service|E: receiver|E: activity|android:name|appComponentFactory|android:process' "$DUMP" | head -n 240
+          echo '=== EARLY PROVIDERS ==='
+          awk '
+            /^[[:space:]]*E: provider/ { in_provider=1; count++; print; next }
+            in_provider && /^[[:space:]]*A:/ { print; next }
+            in_provider && /^[[:space:]]*E:/ { in_provider=0; if (count >= 20) exit }
+          ' "$DUMP"
 
-          echo '=== DEX CANDIDATE APPLICATION CLASSES ==='
-          unzip -p P.apk classes.dex | strings | grep -E 'Application;|AppComponentFactory;|androidx/startup|SystemCallProvider' | head -n 160 || true
+          echo '=== DEX STARTUP CANDIDATES ==='
+          unzip -p P.apk classes.dex | strings | grep -E 'BoxApplication|CoreComponentFactory|androidx/startup|SystemCallProvider' | sed -n '1,160p' || true
+
+      - name: Decompile original startup classes
+        shell: bash
+        run: |
+          set -euo pipefail
+          JADX_ZIP="$RUNNER_TEMP/jadx.zip"
+          JADX_DIR="$RUNNER_TEMP/jadx"
+          OUT="$RUNNER_TEMP/jadx-out"
+          curl -fsSL --retry 3 -o "$JADX_ZIP" \
+            https://github.com/skylot/jadx/releases/download/v1.5.3/jadx-1.5.3.zip
+          mkdir -p "$JADX_DIR" "$OUT"
+          unzip -q "$JADX_ZIP" -d "$JADX_DIR"
+          "$JADX_DIR/bin/jadx" --no-res --no-imports -d "$OUT" P.apk >/dev/null 2>&1 || true
+
+          echo '=== BoxApplication.java ==='
+          BOX=$(find "$OUT" -type f -path '*/com/bgmi/BoxApplication.java' -print -quit)
+          if [ -n "$BOX" ]; then
+            sed -n '1,260p' "$BOX"
+          else
+            echo 'BoxApplication.java not recovered by jadx'
+          fi
+
+          echo '=== SystemCallProvider.java ==='
+          PROVIDER=$(find "$OUT" -type f -path '*/com/mundo/core/system/SystemCallProvider.java' -print -quit)
+          if [ -n "$PROVIDER" ]; then
+            sed -n '1,260p' "$PROVIDER"
+          else
+            echo 'SystemCallProvider.java not recovered by jadx'
+          fi
