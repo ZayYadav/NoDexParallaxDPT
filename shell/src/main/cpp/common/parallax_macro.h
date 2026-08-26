@@ -17,7 +17,6 @@ inline int get_cache_page_size() {
 
 #define SECTION(name) __attribute__ ((section(name)))
 #define KEEP_SYMBOL __attribute__((visibility("default")))
-#define INIT_ARRAY_SECTION __attribute__ ((constructor))
 #define ALWAYS_INLINE static inline __attribute__((always_inline))
 #define NO_INLINE __attribute__((noinline))
 #define SYS_INLINE ALWAYS_INLINE
@@ -36,7 +35,6 @@ inline int get_cache_page_size() {
 #define JUNK_CLASS_FULL_NAME "com/parallax/parallax/junkcode/JunkClass"
 
 #define PARALLAX_PAGE_MASK (~((get_cache_page_size()) - 1))
-
 #define PARALLAX_PAGE_START(addr) ((addr) & (uintptr_t)PARALLAX_PAGE_MASK)
 
 #ifdef __LP64__

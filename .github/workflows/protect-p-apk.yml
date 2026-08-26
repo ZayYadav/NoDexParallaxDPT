@@ -88,12 +88,35 @@ jobs:
           set -euo pipefail
           chmod +x gradlew
           ./gradlew --no-daemon clean
-          ./gradlew --no-daemon :shell:assembleRelease :parallax:jar
+          ./gradlew --no-daemon :shell:assembleRelease :parallax:jar :parallax:test
 
           test -s executable/parallax.jar
           test -s executable/shell-files/dex/classes.dex
           test -s executable/shell-files/libs/arm/ParallaxLover.so
           test -s executable/shell-files/libs/arm64/ParallaxLover.so
+
+      - name: Verify native bootstrap layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+
+          for SO in \
+            executable/shell-files/libs/arm/ParallaxLover.so \
+            executable/shell-files/libs/arm64/ParallaxLover.so; do
+            "$READELF" -S "$SO" | grep -Fq '.bitcode' || {
+              echo "Encrypted runtime section is missing from $SO" >&2
+              exit 1
+            }
+            "$READELF" -d "$SO" | grep -Fq 'INIT_ARRAY' || {
+              echo "Native bootstrap constructor is missing from $SO" >&2
+              exit 1
+            }
+            if "$READELF" -l "$SO" | grep -Eq 'LOAD.*RWE'; then
+              echo "Writable-executable load segment found in $SO" >&2
+              exit 1
+            fi
+          done
 
       - name: Extract P.apk from main
         shell: bash

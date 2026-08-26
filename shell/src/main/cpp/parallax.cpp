@@ -131,7 +131,7 @@ PARALLAX_ENCRYPT static jobjectArray makeInMemoryDexElements(JNIEnv *env, jobjec
             return nullptr;
         }
         jobject imcl = env->NewObject(imclClass, ctor, buffers, targetClassLoader);
-        if (imcl == nullptr || env->ExceptionCheck()) {
+        if (env->ExceptionCheck() || imcl == nullptr) {
             env->ExceptionDescribe();
             env->ExceptionClear();
             DLOGE("create InMemoryDexClassLoader failed");
@@ -159,7 +159,7 @@ PARALLAX_ENCRYPT static jobjectArray makeInMemoryDexElements(JNIEnv *env, jobjec
                 return nullptr;
             }
             jobject imcl = env->NewObject(imclClass, ctor, bb, targetClassLoader);
-            if (imcl == nullptr || env->ExceptionCheck()) {
+            if (env->ExceptionCheck() || imcl == nullptr) {
                 env->ExceptionDescribe();
                 env->ExceptionClear();
                 DLOGE("create InMemoryDexClassLoader failed at %zu", i);
@@ -318,68 +318,6 @@ PARALLAX_ENCRYPT void antiRisk() {
     if (needDetect) {
         detectRisk();
     }
-}
-
-void decrypt_section(const char* section_name, int temp_prot, int target_prot) {
-    Dl_info info;
-    dladdr((const void *)decrypt_section,&info);
-    std::string so_path = {};
-
-    if (info.dli_fname != nullptr) {
-        if (info.dli_fname[0] == '/') {
-            so_path.assign(info.dli_fname);
-        } else {
-            auto path = find_so_path(info.dli_fname);
-            so_path.assign(path);
-        }
-    }
-
-    if(so_path.empty()) {
-        auto path = find_so_path(SO_NAME);
-        so_path.assign(path);
-    }
-
-    Elf_Shdr shdr = {};
-
-    get_elf_section(&shdr, so_path.c_str(), section_name);
-    Elf_Off offset = shdr.sh_offset;
-    Elf_Word size = shdr.sh_size;
-
-    DLOGD("section name: %s, offset: %p, size: %d", section_name, (uint8_t *)offset, size);
-    void *target = (u_char *)info.dli_fbase + offset;
-
-    int ret = parallax_mprotect(target, (void *)((uint8_t *)target + size), temp_prot);
-    if(ret == -1) {
-        abort();
-    }
-
-    u_char *bitcode = (u_char *)malloc(size);
-    struct rc4_state dec_state;
-    rc4_init(&dec_state, reinterpret_cast<const u_char *>(PARALLAX_UNKNOWN_DATA), 16);
-    rc4_crypt(&dec_state, reinterpret_cast<const u_char *>(target),
-              reinterpret_cast<u_char *>(bitcode),
-              size);
-
-    memcpy(target,bitcode,size);
-    PARALLAX_FREE(bitcode);
-
-    int mprotect_ret = parallax_mprotect(target,(void *)((uint8_t *)target + size),target_prot);
-    if(mprotect_ret == -1) {
-        abort();
-    }
-}
-
-void decrypt_bitcode() {
-    decrypt_section((char *)DATA_SECTION_BITCODE, PROT_READ | PROT_WRITE | PROT_EXEC, PROT_READ | PROT_EXEC);
-}
-
-void init_parallax() {
-#ifdef DECRYPT_BITCODE
-    decrypt_bitcode();
-#endif
-    DLOGI("call!");
-
-    parallax_hook();
 }
 
 jclass getRealApplicationClass(JNIEnv *env, const char *applicationClassName) {
