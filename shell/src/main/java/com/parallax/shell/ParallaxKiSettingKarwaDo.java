@@ -29,14 +29,16 @@ public final class ParallaxKiSettingKarwaDo extends Application
     private static final int SECURITY_RUNTIME_TAMPER = 1 << 5;
     private static final String ZIP_LIB_DIR = "ParallaxLoveU";
     private static final String SHELL_SO_NAME = BuildConfig.SO_NAME;
+    private static final Object BOOTSTRAP_LOCK = new Object();
 
     private static volatile int flowNoise = 0x6D2B79F5;
     private static volatile int securityReason;
     private static volatile boolean replacingApplication;
-    private static boolean classLoaderReady;
+    private static volatile boolean classLoaderReady;
     private static boolean needRealApplication = true;
     private static String realApplicationName;
     private static String realComponentFactoryName;
+    private static String applicationPackageName;
     private static Application realApplication;
 
     private Handler protectionHandler;
@@ -65,6 +67,14 @@ public final class ParallaxKiSettingKarwaDo extends Application
 
     static String getRealComponentFactoryName() {
         return realComponentFactoryName;
+    }
+
+    static String getRealApplicationName() {
+        return realApplicationName;
+    }
+
+    static String getApplicationPackageName() {
+        return applicationPackageName;
     }
 
     private static String text(int key, int... data) {
@@ -131,7 +141,43 @@ public final class ParallaxKiSettingKarwaDo extends Application
         }
     }
 
+    /**
+     * Android 9+ asks AppComponentFactory for the application class after it asks for the
+     * class loader. Bootstrap the protected dexes at that earlier, framework-supported
+     * point so the framework can create the real Application directly. This mirrors the
+     * stable ParallaxDPT startup path and avoids an OEM-sensitive LoadedApk swap.
+     */
+    static boolean prepareClassLoader(ClassLoader classLoader, ApplicationInfo info) {
+        if (classLoaderReady) return true;
+        if (classLoader == null || info == null) return false;
+
+        synchronized (BOOTSTRAP_LOCK) {
+            if (classLoaderReady) return true;
+
+            applicationPackageName = info.packageName;
+            File shellLibrary = extractShellLibrary(info.sourceDir, info.dataDir);
+            System.load(shellLibrary.getAbsolutePath());
+
+            // No Context exists yet in AppComponentFactory.instantiateClassLoader(). The
+            // native check still validates the payload, root, tracer and hook state; the
+            // debuggable flag is checked by the pre-28 Application fallback.
+            securityReason = securityStatus(null);
+            if (securityReason != 0) return false;
+
+            ia();
+            cbde(classLoader);
+            realApplicationName = rapn();
+            realComponentFactoryName = rcf();
+            classLoaderReady = true;
+            return true;
+        }
+    }
+
     private void prepare(Context base) {
+        ApplicationInfo earlyInfo = base.getApplicationInfo();
+        if (earlyInfo != null) {
+            applicationPackageName = earlyInfo.packageName;
+        }
         int state = 0x11;
         ApplicationInfo info = null;
         File shellLibrary = null;

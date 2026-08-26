@@ -67,4 +67,22 @@ public class NativeBootstrapSourceTest {
         assertTrue(jni.contains("clearPendingException(env) || klass == nullptr"));
         assertTrue(jni.contains("clearPendingException(env) || methodId == nullptr"));
     }
+
+    @Test
+    public void componentFactoryBootstrapsBeforeInstantiatingRealApplication() throws IOException {
+        String application = read(
+                "shell/src/main/java/com/parallax/shell/ParallaxKiSettingKarwaDo.java");
+        String factory = read(
+                "shell/src/main/java/com/parallax/shell/ParallaxKoLadkiChahiye.java");
+
+        assertTrue(application.contains(
+                "static boolean prepareClassLoader(ClassLoader classLoader, ApplicationInfo info)"));
+        assertTrue(application.indexOf("\n            ia();")
+                < application.indexOf("\n            cbde(classLoader);"));
+        assertTrue(factory.contains(
+                "ParallaxKiSettingKarwaDo.prepareClassLoader(cl, aInfo);"));
+        assertTrue(factory.contains("resolveApplicationName(cl)"));
+        assertTrue(factory.contains("delegate.instantiateApplication(cl, applicationName)"));
+        assertTrue(factory.contains("super.instantiateApplication(cl, applicationName)"));
+    }
 }

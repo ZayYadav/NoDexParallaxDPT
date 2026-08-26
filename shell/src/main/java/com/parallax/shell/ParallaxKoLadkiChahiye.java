@@ -7,6 +7,7 @@ import android.app.Service;
 import android.content.BroadcastReceiver;
 import android.content.ContentProvider;
 import android.content.Intent;
+import android.content.pm.ApplicationInfo;
 import android.os.SystemClock;
 
 import java.lang.ref.WeakReference;
@@ -72,6 +73,32 @@ public final class ParallaxKoLadkiChahiye extends AppComponentFactory {
         }
     }
 
+    private static String resolveApplicationName(ClassLoader classLoader) {
+        String name = ParallaxKiSettingKarwaDo.getRealApplicationName();
+        if (name == null || name.isEmpty()) return null;
+
+        String packageName = ParallaxKiSettingKarwaDo.getApplicationPackageName();
+        if (name.startsWith(".") && packageName != null && !packageName.isEmpty()) {
+            return packageName + name;
+        }
+
+        try {
+            Class.forName(name, false, classLoader);
+            return name;
+        } catch (ClassNotFoundException ignored) {
+            if (name.indexOf('.') < 0 && packageName != null && !packageName.isEmpty()) {
+                return packageName + "." + name;
+            }
+            return name;
+        }
+    }
+
+    @Override
+    public ClassLoader instantiateClassLoader(ClassLoader cl, ApplicationInfo aInfo) {
+        ParallaxKiSettingKarwaDo.prepareClassLoader(cl, aInfo);
+        return cl;
+    }
+
     @Override
     public Activity instantiateActivity(ClassLoader cl, String className, Intent intent)
             throws InstantiationException, IllegalAccessException, ClassNotFoundException {
@@ -101,7 +128,25 @@ public final class ParallaxKoLadkiChahiye extends AppComponentFactory {
     @Override
     public Application instantiateApplication(ClassLoader cl, String className)
             throws InstantiationException, IllegalAccessException, ClassNotFoundException {
-        return super.instantiateApplication(cl, className);
+        if (ParallaxKiSettingKarwaDo.isProtectionBlocked()) {
+            return super.instantiateApplication(cl, className);
+        }
+
+        String applicationName = resolveApplicationName(cl);
+        if (applicationName == null || applicationName.isEmpty()) {
+            return super.instantiateApplication(cl, className);
+        }
+
+        AppComponentFactory delegate = resolveOriginalFactory(cl);
+        if (delegate != null) {
+            try {
+                return delegate.instantiateApplication(cl, applicationName);
+            } catch (Exception ignored) {
+                // Match the platform factory fallback used by the working ParallaxDPT
+                // implementation when an app-specific factory cannot create Application.
+            }
+        }
+        return super.instantiateApplication(cl, applicationName);
     }
 
     @Override
