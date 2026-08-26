@@ -1,0 +1,53 @@
+name: Analyze P.apk Startup
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'fix/startup-bootstrap-manifest'
+    paths:
+      - '.github/workflows/analyze-p-startup.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Android build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;36.0.0"
+
+      - name: Inspect original P.apk startup manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAPT2="$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          DUMP="$RUNNER_TEMP/p-manifest.txt"
+          "$AAPT2" dump xmltree P.apk --file AndroidManifest.xml > "$DUMP"
+
+          echo '=== PACKAGE ==='
+          "$AAPT2" dump badging P.apk | head -n 5
+
+          echo '=== APPLICATION ATTRIBUTES ==='
+          awk '
+            /^[[:space:]]*E: application/ { in_app=1; print; next }
+            in_app && /^[[:space:]]*A:/ { print; next }
+            in_app && /^[[:space:]]*E:/ { exit }
+          ' "$DUMP"
+
+          echo '=== FIRST STARTUP COMPONENTS ==='
+          grep -n -E 'E: provider|E: service|E: receiver|E: activity|android:name|appComponentFactory|android:process' "$DUMP" | head -n 240
+
+          echo '=== DEX CANDIDATE APPLICATION CLASSES ==='
+          unzip -p P.apk classes.dex | strings | grep -E 'Application;|AppComponentFactory;|androidx/startup|SystemCallProvider' | head -n 160 || true
