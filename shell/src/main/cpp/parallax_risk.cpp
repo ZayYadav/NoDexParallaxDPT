@@ -43,21 +43,12 @@ PARALLAX_ENCRYPT jint runtimeSecurityState(JNIEnv *, jclass) {
 }
 
 PARALLAX_ENCRYPT NO_INLINE void parallax_crash() {
-#ifdef DEBUG
-    abort();
-#else
-    asm volatile(
-#ifdef __aarch64__
-    "mov x30,#0\t\n"
-#elif __arm__
-    "mov lr,#0\t\n"
-#elif __i386__
-    "ret\t\n"
-#elif __x86_64__
-    "pop %rbp\t\n"
-#endif
-);
-#endif
+    // Legacy callers used to corrupt LR/return state and deliberately crash the process.
+    // That is hostile to runtime compatibility and bypasses the protection warning UX.
+    // Latch the finding instead; the Java protection poller will block the session and
+    // show the fullscreen warning without killing an otherwise healthy app process.
+    DLOGW("legacy fatal protection condition converted to runtime security state");
+    reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
 }
 
 PARALLAX_ENCRYPT void junkCodeDexProtect(JNIEnv *env) {
@@ -423,33 +414,12 @@ PARALLAX_ENCRYPT jint securityStatus(JNIEnv *env, jclass, jobject context) {
     return result;
 }
 
-static void *delayedExitThread(void *arg) {
-    intptr_t raw = reinterpret_cast<intptr_t>(arg);
-    int delayMs = static_cast<int>(raw);
-    if (delayMs > 0) {
-        usleep(static_cast<useconds_t>(delayMs) * 1000U);
-    }
-    kill(getpid(), SIGKILL);
-    _exit(0);
-    return nullptr;
-}
-
 PARALLAX_ENCRYPT void scheduleExit(JNIEnv *, jclass, jint delayMs) {
-    if (delayMs < 0) {
-        delayMs = 0;
-    } else if (delayMs > 10000) {
-        delayMs = 10000;
-    }
-
-    pthread_t thread;
-    void *arg = reinterpret_cast<void *>(static_cast<intptr_t>(delayMs));
-    if (pthread_create(&thread, nullptr, delayedExitThread, arg) == 0) {
-        pthread_detach(thread);
-        return;
-    }
-
-    kill(getpid(), SIGKILL);
-    _exit(0);
+    // Kept for JNI ABI compatibility with older bootstrap code. Deliberate SIGKILL is no
+    // longer part of the protection policy; latch a blocked state and let the warning UI
+    // own the user-visible response.
+    DLOGW("scheduleExit(%d) ignored; runtime protection state latched", delayMs);
+    reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
 }
 
 // Compare in-memory libc .text CRC with on-disk .text CRC; report if mismatched.
