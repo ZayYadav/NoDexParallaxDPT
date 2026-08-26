@@ -6,6 +6,7 @@ on:
       - main
       - 'ci/**'
       - 'hard/**'
+      - 'fix/**'
   pull_request:
   workflow_dispatch:
 
@@ -77,6 +78,11 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon clean
+
+      - name: Run runtime compatibility tests
+        shell: bash
+        run: |
+          ./gradlew --no-daemon :parallax:test
 
       - name: Build release shell and CLI
         shell: bash
