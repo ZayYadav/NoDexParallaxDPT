@@ -32,6 +32,7 @@ public final class ParallaxKiSettingKarwaDo extends Application
 
     private static volatile int flowNoise = 0x6D2B79F5;
     private static volatile int securityReason;
+    private static volatile boolean replacingApplication;
     private static boolean classLoaderReady;
     private static boolean needRealApplication = true;
     private static String realApplicationName;
@@ -171,7 +172,15 @@ public final class ParallaxKiSettingKarwaDo extends Application
                             ? nextState(0x92, 0xB1) : nextState(0xA3, 0xB2);
                     break;
                 case 0x92:
-                    app = ra(realApplicationName);
+                    replacingApplication = true;
+                    try {
+                        app = ra(realApplicationName);
+                    } finally {
+                        // The old proxy needed an empty package name only during the narrow
+                        // LoadedApk/Application swap. Keeping it empty after boot breaks SDKs,
+                        // game engines and package-scoped services initialized much later.
+                        replacingApplication = false;
+                    }
                     if (app instanceof Application) {
                         realApplication = (Application) app;
                         needRealApplication = false;
@@ -271,7 +280,7 @@ public final class ParallaxKiSettingKarwaDo extends Application
 
     @Override
     public String getPackageName() {
-        if (securityReason == 0 && realApplicationName != null && !realApplicationName.isEmpty()) return "";
+        if (replacingApplication) return "";
         return super.getPackageName();
     }
 
