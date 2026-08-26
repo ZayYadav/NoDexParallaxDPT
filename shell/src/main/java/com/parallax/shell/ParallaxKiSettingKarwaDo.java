@@ -271,10 +271,17 @@ public final class ParallaxKiSettingKarwaDo extends Application
     @Override
     public Context createPackageContext(String packageName, int flags)
             throws PackageManager.NameNotFoundException {
-        if (securityReason == 0 && realApplicationName != null && !realApplicationName.isEmpty()) {
+        String ownPackage = super.getPackageName();
+        if (securityReason == 0
+                && packageName != null
+                && packageName.equals(ownPackage)
+                && realApplicationName != null
+                && !realApplicationName.isEmpty()) {
             replaceApplication();
             if (realApplication != null) return realApplication;
         }
+        // Foreign package lookups (Play Services, stores, WebView/provider packages, etc.)
+        // must keep Android's normal PackageManager/Context behavior.
         return super.createPackageContext(packageName, flags);
     }
 
