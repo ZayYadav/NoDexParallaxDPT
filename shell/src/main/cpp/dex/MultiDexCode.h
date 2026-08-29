@@ -7,14 +7,16 @@
 
 #include <cstdint>
 #include <cstring>
+#include <vector>
 #include "CodeItem.h"
 #include "common/parallax_log.h"
 
 namespace parallax::data {
         class MultiDexCode {
         private:
-            size_t m_size;
-            uint8_t *m_buffer;
+            size_t m_size{0};
+            uint8_t *m_buffer{nullptr};
+            std::vector<uint8_t> m_owned_buffer;
         public:
             static MultiDexCode *getInst();
 
