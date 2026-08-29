@@ -11,7 +11,7 @@ import org.junit.Test;
 
 public class BootstrapManifestNamesTest {
 
-    private static final String SHELL_PACKAGE = "com.parallax.protection";
+    private static final String SHELL_PACKAGE = "Parallax.Enc";
     private static final String APPLICATION = SHELL_PACKAGE + ".Parallax1";
     private static final String FACTORY = SHELL_PACKAGE + ".Parallax2";
 
@@ -41,7 +41,14 @@ public class BootstrapManifestNamesTest {
         assertEquals("Parallax1", Const.KEY_JNI_BASE_CLASS_NAME);
         assertEquals("Parallax2", Const.KEY_COMPONENT_FACTORY_BASE_CLASS_NAME);
         assertEquals("Parallax3", Const.KEY_GATE_BASE_CLASS_NAME);
-        assertEquals("Lcom/parallax/protection/Parallax1;",
+        assertEquals("LParallax/Enc/Parallax1;",
                 ShellConfig.getInstance().getJniClassNameSig());
+    }
+
+    @Test
+    public void staleProtectionNamespaceCannotOverrideReleaseAbi() {
+        ShellConfig.getInstance().init("com.parallax.protection");
+        assertEquals(SHELL_PACKAGE, ShellConfig.getInstance().getShellPackageName());
+        assertEquals(APPLICATION, new Apk.Builder().build().getProxyApplicationName());
     }
 }
