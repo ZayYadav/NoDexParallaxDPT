@@ -113,6 +113,58 @@ jobs:
           echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
           echo "- class definitions: ${CLASS_DEFS}" >> "$GITHUB_STEP_SUMMARY"
 
+          # Print the exact R8 class map and actual DEX class definitions before enforcing
+          # the stable release ABI. This makes mapping failures diagnosable without
+          # weakening the release checks.
+          MAPPING=shell/build/outputs/mapping/release/mapping.txt
+          if [ -s "$MAPPING" ]; then
+            echo "--- R8 shell class mapping ---"
+            grep '^com\.parallax\.shell\.' "$MAPPING" || true
+          fi
+          echo "--- Release DEX class descriptors ---"
+          python3 - "$DEX" <<'PY'
+          import struct, sys
+
+          data = open(sys.argv[1], 'rb').read()
+          if len(data) < 112 or not data.startswith(b'dex\n'):
+              raise SystemExit('invalid dex header')
+
+          string_ids_size, string_ids_off = struct.unpack_from('<II', data, 56)
+          type_ids_size, type_ids_off = struct.unpack_from('<II', data, 64)
+          class_defs_size, class_defs_off = struct.unpack_from('<II', data, 96)
+
+          def read_uleb128(off):
+              value = 0
+              shift = 0
+              while True:
+                  b = data[off]
+                  off += 1
+                  value |= (b & 0x7f) << shift
+                  if not (b & 0x80):
+                      return value, off
+                  shift += 7
+                  if shift > 35:
+                      raise ValueError('bad uleb128')
+
+          def dex_string(index):
+              if index >= string_ids_size:
+                  raise ValueError('bad string index')
+              (off,) = struct.unpack_from('<I', data, string_ids_off + index * 4)
+              _, off = read_uleb128(off)
+              end = data.index(0, off)
+              return data[off:end].decode('utf-8', 'replace')
+
+          descriptors = []
+          for i in range(class_defs_size):
+              (class_idx,) = struct.unpack_from('<I', data, class_defs_off + i * 32)
+              if class_idx >= type_ids_size:
+                  raise ValueError('bad class type index')
+              (string_idx,) = struct.unpack_from('<I', data, type_ids_off + class_idx * 4)
+              descriptors.append(dex_string(string_idx))
+          for descriptor in sorted(descriptors):
+              print(descriptor)
+          PY
+
           # Fifteen mapped Parallax shell classes + two named anchors + the fixed Parallax16
           # native VM bridge are intentionally retained. Allow a few R8/desugaring helpers.
           if [ "$CLASS_DEFS" -lt 18 ] || [ "$CLASS_DEFS" -gt 34 ]; then
