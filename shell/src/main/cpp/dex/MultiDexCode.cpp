@@ -5,6 +5,7 @@
 #include "MultiDexCode.h"
 
 #include <string>
+#include <utility>
 
 #include "common/obfuscate.h"
 #include "parallax_crypto.h"
@@ -32,11 +33,31 @@ parallax::data::MultiDexCode* parallax::data::MultiDexCode::getInst(){
 }
 
 void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
+    // init_app can be reached more than once in unusual lifecycle/plugin flows. Re-parsing
+    // the same envelope would construct CodeItem objects over bytes that are already
+    // runtime-wrapped and corrupt the instruction vault. Keep the first authenticated
+    // parse alive and make subsequent reads report zero new DEX entries.
+    if (m_source_buffer == buffer
+        && m_source_size == size
+        && m_buffer != nullptr
+        && (!m_owned_buffer.empty()
+#ifndef DEBUG
+            || m_buffer == INVALID_CODE_ITEM_BUFFER
+#endif
+           )) {
+        m_skip_parse = true;
+        DLOGD("code-item vault already initialized; skip duplicate parse");
+        return;
+    }
+
+    m_skip_parse = false;
     if (!m_owned_buffer.empty()) {
         secure_zero(m_owned_buffer.data(), m_owned_buffer.size());
         m_owned_buffer.clear();
         m_owned_buffer.shrink_to_fit();
     }
+    m_source_buffer = buffer;
+    m_source_size = size;
 
     // Fail closed in release builds: the method-body sidecar must be the authenticated
     // PCI2 envelope emitted by the matching Parallax packer. A raw/plain sidecar would
@@ -106,6 +127,9 @@ uint16_t parallax::data::MultiDexCode::readVersion(){
 }
 
 uint16_t parallax::data::MultiDexCode::readDexCount(){
+    if (m_skip_parse) {
+        return 0;
+    }
     return readUInt16(2);
 }
 
