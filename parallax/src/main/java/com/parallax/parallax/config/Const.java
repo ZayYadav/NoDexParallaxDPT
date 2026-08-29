@@ -72,17 +72,17 @@ public class Const {
     public static final String KEY_CODE_ITEM_STORE_NAME = "Parallax.love";
     public static final String KEY_LIBS_DIR_NAME = "ParallaxLoveU";
 
-    // These are RELEASE DEX names produced by shell/stub-obfuscation.map. The shell source
-    // intentionally keeps descriptive class names so compile-time references stay type-safe.
+    // These are RELEASE DEX names. The shell source intentionally keeps descriptive
+    // names so compile-time Java/JNI references stay type-safe; R8 emits the compact ABI.
     public static final String KEY_JNI_BASE_CLASS_NAME = "Parallax1";
     public static final String KEY_COMPONENT_FACTORY_BASE_CLASS_NAME = "Parallax2";
     public static final String KEY_GATE_BASE_CLASS_NAME = "Parallax3";
 
-    // Package compiled into the shell dex before the build-time rename pass.
+    // Source package compiled into the shell before the release rename/repackage pass.
     public static final String DEFAULT_SHELL_PACKAGE_NAME = "com/parallax/shell";
-    // Branded package emitted into protected APKs unless a custom config overrides it.
-    // UI brand remains human-readable as "Parallax Protection".
-    public static final String BRANDED_SHELL_PACKAGE_NAME = "com.parallax.protection";
+    // One canonical runtime namespace. Protected manifests, JNI descriptors, mapped shell
+    // classes and the high-value VM bridge must all resolve here.
+    public static final String BRANDED_SHELL_PACKAGE_NAME = "Parallax.Enc";
     public static final String SHELL_PACKAGE_NAME_AUTO = "<random>";
     public static final String RANDOM_DIR_NAME = StringUtils.generateIdentifier(16);
 }
