@@ -14,7 +14,7 @@ import java.util.List;
 
 /** Build-process coordinator for the opt-in high-value native VM tier. */
 public final class HighValueVmCoordinator {
-    private static final String FIXED_VM_BRIDGE_SIG = "Lparallax/vm/Parallax16;";
+    private static final String FIXED_VM_BRIDGE_SIG = "LParallax/Enc/CrackWarTeamMC;";
     private static volatile String rulesPath;
     private static boolean prepared;
 
