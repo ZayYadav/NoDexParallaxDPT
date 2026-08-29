@@ -5,9 +5,9 @@
 #ifndef PARALLAX_MULTIDEXCODE_H
 #define PARALLAX_MULTIDEXCODE_H
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <vector>
 #include "CodeItem.h"
 #include "common/parallax_log.h"
 
@@ -19,7 +19,8 @@ namespace parallax::data {
             const uint8_t *m_source_buffer{nullptr};
             size_t m_source_size{0};
             bool m_skip_parse{false};
-            std::vector<uint8_t> m_owned_buffer;
+            uint8_t *m_owned_buffer{nullptr};
+            size_t m_owned_buffer_size{0};
         public:
             static MultiDexCode *getInst();
 
