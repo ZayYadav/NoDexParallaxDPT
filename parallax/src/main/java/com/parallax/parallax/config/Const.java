@@ -71,7 +71,12 @@ public class Const {
     public static final String KEY_DEXES_STORE_UNALIGNED_NAME = "i11111i111_unaligned.zip";
     public static final String KEY_CODE_ITEM_STORE_NAME = "Parallax.love";
     public static final String KEY_LIBS_DIR_NAME = "ParallaxLoveU";
-    public static final String KEY_JNI_BASE_CLASS_NAME = "ParallaxKiSettingKarwaDo";
+
+    // These are RELEASE DEX names produced by shell/stub-obfuscation.map. The shell source
+    // intentionally keeps descriptive class names so compile-time references stay type-safe.
+    public static final String KEY_JNI_BASE_CLASS_NAME = "Parallax1";
+    public static final String KEY_COMPONENT_FACTORY_BASE_CLASS_NAME = "Parallax2";
+    public static final String KEY_GATE_BASE_CLASS_NAME = "Parallax3";
 
     // Package compiled into the shell dex before the build-time rename pass.
     public static final String DEFAULT_SHELL_PACKAGE_NAME = "com/parallax/shell";
