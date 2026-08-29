@@ -113,13 +113,10 @@ jobs:
           echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
           echo "- class definitions: ${CLASS_DEFS}" >> "$GITHUB_STEP_SUMMARY"
 
-          # Print the exact R8 class map and actual DEX class definitions before enforcing
-          # the stable release ABI. This makes mapping failures diagnosable without
-          # weakening the release checks.
           MAPPING=shell/build/outputs/mapping/release/mapping.txt
           if [ -s "$MAPPING" ]; then
             echo "--- R8 shell class mapping ---"
-            grep '^com\.parallax\.shell\.' "$MAPPING" || true
+            grep -E '^(com\.parallax\.|parallax\.vm\.)' "$MAPPING" || true
           fi
           echo "--- Release DEX class descriptors ---"
           python3 - "$DEX" <<'PY'
@@ -165,10 +162,10 @@ jobs:
               print(descriptor)
           PY
 
-          # Fifteen mapped Parallax shell classes + two named anchors + the fixed Parallax16
-          # native VM bridge are intentionally retained. Allow a few R8/desugaring helpers.
+          # Fourteen numbered shell classes + four named anchors are retained. Allow a
+          # few R8/desugaring helpers, but every retained project class must use Parallax.Enc.
           if [ "$CLASS_DEFS" -lt 18 ] || [ "$CLASS_DEFS" -gt 34 ]; then
-            echo "Expected a compact mapped protection bootstrap with 18-34 class definitions, got ${CLASS_DEFS}" >&2
+            echo "Expected a compact protection bootstrap with 18-34 class definitions, got ${CLASS_DEFS}" >&2
             exit 1
           fi
 
@@ -179,43 +176,27 @@ jobs:
 
           STRINGS="$RUNNER_TEMP/release-shell-strings.txt"
           strings "$DEX" > "$STRINGS"
-          for i in $(seq 1 15); do
+          for i in $(seq 1 14); do
             name="Parallax${i}"
             grep -Fq "$name" "$STRINGS" || {
               echo "Mapped release stub class missing from shell DEX: $name" >&2
               exit 1
             }
           done
-          for name in JangamBhai Darkdevel; do
+          for name in JangamBhai DarkDevel Keshav CrackWarTeamMC; do
             grep -Fq "$name" "$STRINGS" || {
               echo "Mapped release stub anchor missing from shell DEX: $name" >&2
               exit 1
             }
           done
-          grep -Fq 'Lparallax/vm/Parallax16;' "$STRINGS" || {
-            echo "Fixed high-value VM bridge missing from shell DEX: parallax.vm.Parallax16" >&2
+          grep -Fq 'LParallax/Enc/CrackWarTeamMC;' "$STRINGS" || {
+            echo "High-value VM bridge missing from shell DEX: Parallax.Enc.CrackWarTeamMC" >&2
             exit 1
           }
 
-          for old in \
-            ParallaxKiSettingKarwaDo \
-            ParallaxKoLadkiChahiye \
-            ParallaxGate \
-            Global \
-            ParallaxBhaiKiSecurity \
-            ParallaxBhaiya \
-            ParallaxDialogBhaiya \
-            ParallaxHu \
-            ParallaxHuMaalik \
-            ParallaxJaRaha \
-            ParallaxKaBhaiJangu \
-            ParallaxKiShadiKarwaDo \
-            ParallaxLovers \
-            ParallaxVirtualBhaiya \
-            JangamMeraBhaiHai \
-            ParallaxHuYaarBhai; do
-            if grep -Fq "Lcom/parallax/shell/${old};" "$STRINGS"; then
-              echo "Old stub class descriptor leaked into release DEX: $old" >&2
+          for banned in 'Lparallax/vm/' 'Lcom/parallax/shell/' 'Lcom/parallax/protection/'; do
+            if grep -Fq "$banned" "$STRINGS"; then
+              echo "Legacy release namespace leaked into shell DEX: $banned" >&2
               exit 1
             fi
           done
@@ -271,7 +252,7 @@ jobs:
             fi
 
             EXPORTS=$("$NM" -D --defined-only "$SO" | awk '{print $3}' | sed '/^$/d' | sort -u)
-            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|PARALLAX_UNKNOWN_DATA|Java_parallax_vm_Parallax16_(hvi|hvv)[0-4])$' || true)
+            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|PARALLAX_UNKNOWN_DATA|Java_Parallax_Enc_CrackWarTeamMC_(hvi|hvv)[0-4])$' || true)
             if [ -n "$UNEXPECTED" ]; then
               echo "Unexpected exported native symbols in $SO:" >&2
               printf '%s\n' "$UNEXPECTED" >&2
@@ -287,8 +268,8 @@ jobs:
             }
             for kind in hvi hvv; do
               for n in $(seq 0 4); do
-                printf '%s\n' "$EXPORTS" | grep -qx "Java_parallax_vm_Parallax16_${kind}${n}" || {
-                  echo "Missing Parallax16 JNI export: ${kind}${n}" >&2
+                printf '%s\n' "$EXPORTS" | grep -qx "Java_Parallax_Enc_CrackWarTeamMC_${kind}${n}" || {
+                  echo "Missing CrackWarTeamMC JNI export: ${kind}${n}" >&2
                   exit 1
                 }
               done
@@ -303,7 +284,7 @@ jobs:
           echo "### Native ELF hardening" >> "$GITHUB_STEP_SUMMARY"
           echo "- ABIs: armeabi-v7a + arm64-v8a only" >> "$GITHUB_STEP_SUMMARY"
           echo "- GNU RELRO + BIND_NOW + NX stack: enforced" >> "$GITHUB_STEP_SUMMARY"
-          echo "- dynamic exports: JNI_OnLoad, build-key patch symbol, fixed Parallax16 VM JNI only" >> "$GITHUB_STEP_SUMMARY"
+          echo "- dynamic exports: JNI_OnLoad, build-key patch symbol, Parallax.Enc CrackWarTeamMC JNI only" >> "$GITHUB_STEP_SUMMARY"
           echo "- static symbol table in release SO: rejected" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release artifacts
