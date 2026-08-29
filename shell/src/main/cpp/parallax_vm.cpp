@@ -298,8 +298,9 @@ void loadHighValueVm(JNIEnv *env) {
         uint32_t rawSize = be32(entryData + 4);
         if (rawSize == 0 || rawSize > kMaxVmPayload) break;
 
+        const char *buildKey = AY_OBFUSCATE(PARALLAX_BUILD_KEY);
         std::string label = std::string(AY_OBFUSCATE("Parallax/highvalue/vm/encryption/v1/"))
-                + AY_OBFUSCATE(PARALLAX_BUILD_KEY);
+                + buildKey;
         auto key = hmac_sha256(PARALLAX_UNKNOWN_DATA, 16,
                 reinterpret_cast<const uint8_t *>(label.data()), label.size());
         if (key.size() != 32) break;
