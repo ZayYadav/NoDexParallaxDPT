@@ -109,6 +109,10 @@ jobs:
               exit 1
             }
           done
+          grep -Fq 'Lparallax/vm/Parallax16;' "$STRINGS" || {
+            echo "Fixed high-value VM bridge is missing: parallax.vm.Parallax16" >&2
+            exit 1
+          }
 
           for old in \
             ParallaxKiSettingKarwaDo \
@@ -149,8 +153,7 @@ jobs:
           import sys
 
           readelf, so_path = sys.argv[1:]
-          output = subprocess.check_output(
-              [readelf, "--sections", "--wide", so_path], text=True)
+          output = subprocess.check_output([readelf, "--sections", "--wide", so_path], text=True)
           sections = {}
           pattern = re.compile(
               r"^\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-fA-F]+)\s+"
@@ -158,8 +161,7 @@ jobs:
           for line in output.splitlines():
               match = pattern.match(line)
               if match:
-                  sections[match.group(1)] = (
-                      int(match.group(2), 16), int(match.group(3), 16))
+                  sections[match.group(1)] = (int(match.group(2), 16), int(match.group(3), 16))
 
           bitcode_address, bitcode_size = sections[".bitcode"]
           plt_address, _ = sections[".plt"]
@@ -173,9 +175,7 @@ jobs:
               raise SystemExit(
                   f".plt overlaps the writable decryption range in {so_path}: "
                   f"plt=0x{plt_address:x}, bitcode_end=0x{bitcode_end:x}")
-          print(
-              f"Verified isolated .bitcode pages in {so_path}: "
-              f"0x{bitcode_address:x}-0x{bitcode_end:x}")
+          print(f"Verified isolated .bitcode pages in {so_path}: 0x{bitcode_address:x}-0x{bitcode_end:x}")
           PY
           done
 
@@ -263,6 +263,10 @@ jobs:
               exit 1
             }
           done
+          grep -Fq 'Lparallax/vm/Parallax16;' "$DEX_STRINGS" || {
+            echo "Fixed high-value VM bridge is absent from protected classes.dex" >&2
+            exit 1
+          }
 
           for old in ParallaxKiSettingKarwaDo ParallaxKoLadkiChahiye ParallaxGate JangamMeraBhaiHai ParallaxHuYaarBhai; do
             if grep -Fq "Lcom/parallax/protection/${old};" "$DEX_STRINGS"; then
@@ -274,6 +278,7 @@ jobs:
           echo "- Bootstrap Application: $EXPECTED_APP" >> "$GITHUB_STEP_SUMMARY"
           echo "- Component factory: $EXPECTED_FACTORY" >> "$GITHUB_STEP_SUMMARY"
           echo "- Stub series: Parallax1/2/3 + JangamBhai + Darkdevel verified" >> "$GITHUB_STEP_SUMMARY"
+          echo "- High-value VM bridge: parallax.vm.Parallax16 verified" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload protected APK
         uses: actions/upload-artifact@v4
