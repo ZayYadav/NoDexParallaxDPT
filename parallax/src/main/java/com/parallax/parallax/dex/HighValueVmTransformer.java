@@ -37,21 +37,21 @@ import java.nio.file.Files;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * Opt-in high-value method compiler.
+ * High-value method compiler.
  *
  * A selected method is compiled into a private integer VM program and its ORIGINAL Dalvik
- * body is replaced, before normal DPT extraction, with a tiny Parallax16 JNI trampoline.
+ * body is replaced, before normal DPT extraction, with a tiny fixed JNI trampoline.
  * The original selected body therefore never enters the hollow DEX or Parallax.love.
  *
- * Production v1 deliberately accepts only verifier-safe static int/void methods with at
- * most four int parameters. Unsupported selected methods fail the whole pack instead of
- * silently falling back to ordinary DEX restoration.
+ * Manual rules remain fail-closed. Auto mode probes every method with the same compiler and
+ * only selects methods that are completely supported, leaving everything else on normal DPT.
  */
 public final class HighValueVmTransformer {
     private static final byte[] ENVELOPE_MAGIC = {'P', 'V', 'M', '1'};
@@ -59,9 +59,10 @@ public final class HighValueVmTransformer {
     private static final String KEY_LABEL = "Parallax/highvalue/vm/encryption/v1/";
     private static final String AAD_PREFIX = "Parallax/highvalue/vm/payload/v1/";
     private static final int NONCE_SIZE = 12;
+    private static final int MAX_SEMANTIC_OPS_PER_PROGRAM = 65536;
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    // Keep in sync with shell/src/main/cpp/parallax_vm.cpp.
+    // Keep in sync with shell/src/main/cpp/parallax_vm4.cpp.
     public static final int OP_NOP = 0;
     public static final int OP_CONST = 1;
     public static final int OP_MOVE = 2;
@@ -113,10 +114,16 @@ public final class HighValueVmTransformer {
     public static final class Rule {
         private final String source;
         private final Pattern pattern;
+        private final boolean wildcard;
         private int matches;
 
         Rule(String source) {
             this.source = source;
+            this.wildcard = source.indexOf('*') >= 0 || source.indexOf('?') >= 0;
+            if (!wildcard) {
+                this.pattern = null;
+                return;
+            }
             StringBuilder regex = new StringBuilder("^");
             for (int i = 0; i < source.length(); i++) {
                 char ch = source.charAt(i);
@@ -128,11 +135,13 @@ public final class HighValueVmTransformer {
         }
 
         boolean matches(String signature) {
-            if (!pattern.matcher(signature).matches()) return false;
+            boolean matched = wildcard ? pattern.matcher(signature).matches() : source.equals(signature);
+            if (!matched) return false;
             matches++;
             return true;
         }
 
+        boolean isExact() { return !wildcard; }
         public String getSource() { return source; }
         public int getMatches() { return matches; }
     }
@@ -165,6 +174,34 @@ public final class HighValueVmTransformer {
         public int getNextMethodId() { return nextMethodId; }
     }
 
+    /** Aggregate-only discovery data; method signatures are intentionally not written to the APK. */
+    public static final class AutoScanResult {
+        private final List<Rule> rules;
+        private final int scanned;
+        private final int compatible;
+        private final int unsupported;
+        private final int deferredByLimit;
+        private final int selectedOps;
+
+        AutoScanResult(List<Rule> rules, int scanned, int compatible, int unsupported,
+                       int deferredByLimit, int selectedOps) {
+            this.rules = rules;
+            this.scanned = scanned;
+            this.compatible = compatible;
+            this.unsupported = unsupported;
+            this.deferredByLimit = deferredByLimit;
+            this.selectedOps = selectedOps;
+        }
+
+        public List<Rule> getRules() { return rules; }
+        public int getScanned() { return scanned; }
+        public int getCompatible() { return compatible; }
+        public int getUnsupported() { return unsupported; }
+        public int getDeferredByLimit() { return deferredByLimit; }
+        public int getSelected() { return rules.size(); }
+        public int getSelectedOps() { return selectedOps; }
+    }
+
     public static List<Rule> loadRules(String rulesPath) throws IOException {
         if (rulesPath == null || rulesPath.trim().isEmpty()) return new ArrayList<>();
         File file = new File(rulesPath);
@@ -185,6 +222,48 @@ public final class HighValueVmTransformer {
                 "High-value method rule(s) matched nothing: " + String.join(", ", missing));
     }
 
+    /**
+     * Probe every method with the exact same compiler used for real conversion. Unsupported
+     * methods are skipped rather than causing an auto-mode pack failure. Selection is bounded
+     * by both program count and semantic-op budget so PVM4 stays inside native runtime limits.
+     */
+    public static AutoScanResult scanAutoCandidates(File inputDex, int maxSelections,
+                                                     int maxSemanticOps) throws IOException {
+        if (maxSelections < 0 || maxSemanticOps < 0) {
+            throw new IOException("High-value auto limits cannot be negative");
+        }
+        DexBackedDexFile dex = DexFileFactory.loadDexFile(inputDex, Opcodes.getDefault());
+        List<Rule> selectedRules = new ArrayList<>();
+        int scanned = 0;
+        int compatible = 0;
+        int unsupportedCount = 0;
+        int deferred = 0;
+        int selectedOps = 0;
+
+        for (ClassDef classDef : dex.getClasses()) {
+            for (Method method : classDef.getMethods()) {
+                scanned++;
+                String signature = signatureOf(method);
+                try {
+                    Program program = compile(1, signature, method);
+                    compatible++;
+                    int opCount = program.ops.size();
+                    if (selectedRules.size() >= maxSelections
+                            || selectedOps + opCount > maxSemanticOps) {
+                        deferred++;
+                        continue;
+                    }
+                    selectedRules.add(new Rule(signature));
+                    selectedOps += opCount;
+                } catch (IOException | RuntimeException ignored) {
+                    unsupportedCount++;
+                }
+            }
+        }
+        return new AutoScanResult(selectedRules, scanned, compatible, unsupportedCount,
+                deferred, selectedOps);
+    }
+
     public static Result transform(File inputDex, File outputDex, List<Rule> rules,
                                    int firstMethodId, String bridgeClassSig) throws IOException {
         DexBackedDexFile dex = DexFileFactory.loadDexFile(inputDex, Opcodes.getDefault());
@@ -192,12 +271,26 @@ public final class HighValueVmTransformer {
         List<Program> programs = new ArrayList<>();
         int nextId = firstMethodId;
 
+        Map<String, List<Rule>> exactRules = new HashMap<>();
+        List<Rule> wildcardRules = new ArrayList<>();
+        for (Rule rule : rules) {
+            if (rule.isExact()) {
+                exactRules.computeIfAbsent(rule.getSource(), ignored -> new ArrayList<>()).add(rule);
+            } else {
+                wildcardRules.add(rule);
+            }
+        }
+
         for (ClassDef classDef : dex.getClasses()) {
             List<Method> methods = new ArrayList<>();
             for (Method method : classDef.getMethods()) {
                 String signature = signatureOf(method);
                 boolean selected = false;
-                for (Rule rule : rules) selected |= rule.matches(signature);
+                List<Rule> exact = exactRules.get(signature);
+                if (exact != null) {
+                    for (Rule rule : exact) selected |= rule.matches(signature);
+                }
+                for (Rule rule : wildcardRules) selected |= rule.matches(signature);
                 if (!selected) {
                     methods.add(method);
                     continue;
@@ -305,6 +398,10 @@ public final class HighValueVmTransformer {
             addressToIndex.put(address, insns.size());
             insns.add(i);
             address += i.getCodeUnits();
+        }
+        if (insns.isEmpty()) throw unsupported(signature, "method has no executable instructions");
+        if (insns.size() > MAX_SEMANTIC_OPS_PER_PROGRAM) {
+            throw unsupported(signature, "method exceeds VM operation limit");
         }
         List<VmOp> ops = new ArrayList<>(insns.size());
         address = 0;
