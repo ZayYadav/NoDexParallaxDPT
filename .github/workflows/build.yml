@@ -114,10 +114,11 @@ jobs:
           echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
           echo "- class definitions: ${CLASS_DEFS}" >> "$GITHUB_STEP_SUMMARY"
 
-          # The deterministic stub map deliberately retains the two named security anchors.
-          # R8 may still synthesize a small number of helper/desugaring classes.
-          if [ "$CLASS_DEFS" -lt 6 ] || [ "$CLASS_DEFS" -gt 20 ]; then
-            echo "Expected a compact protection bootstrap with 6-20 class definitions, got ${CLASS_DEFS}" >&2
+          # Fifteen deterministic Parallax classes plus two named anchors are intentionally
+          # retained as separate release class boundaries. R8/AGP can still add a handful
+          # of framework/desugaring helpers, so keep a bounded but realistic ceiling.
+          if [ "$CLASS_DEFS" -lt 17 ] || [ "$CLASS_DEFS" -gt 32 ]; then
+            echo "Expected a compact mapped protection bootstrap with 17-32 class definitions, got ${CLASS_DEFS}" >&2
             exit 1
           fi
 
@@ -128,13 +129,37 @@ jobs:
 
           STRINGS="$RUNNER_TEMP/release-shell-strings.txt"
           strings "$DEX" > "$STRINGS"
-          for name in Parallax1 Parallax2 Parallax3 JangamBhai Darkdevel; do
+          for i in $(seq 1 15); do
+            name="Parallax${i}"
             grep -Fq "$name" "$STRINGS" || {
               echo "Mapped release stub class missing from shell DEX: $name" >&2
               exit 1
             }
           done
-          for old in ParallaxKiSettingKarwaDo ParallaxKoLadkiChahiye ParallaxGate JangamMeraBhaiHai ParallaxHuYaarBhai; do
+          for name in JangamBhai Darkdevel; do
+            grep -Fq "$name" "$STRINGS" || {
+              echo "Mapped release stub anchor missing from shell DEX: $name" >&2
+              exit 1
+            }
+          done
+
+          for old in \
+            ParallaxKiSettingKarwaDo \
+            ParallaxKoLadkiChahiye \
+            ParallaxGate \
+            Global \
+            ParallaxBhaiKiSecurity \
+            ParallaxBhaiya \
+            ParallaxDialogBhaiya \
+            ParallaxHu \
+            ParallaxHuMaalik \
+            ParallaxJaRaha \
+            ParallaxKaBhaiJangu \
+            ParallaxKiShadiKarwaDo \
+            ParallaxLovers \
+            ParallaxVirtualBhaiya \
+            JangamMeraBhaiHai \
+            ParallaxHuYaarBhai; do
             if grep -Fq "Lcom/parallax/shell/${old};" "$STRINGS"; then
               echo "Old stub class descriptor leaked into release DEX: $old" >&2
               exit 1
@@ -166,10 +191,7 @@ jobs:
           set -euo pipefail
           TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           READELF="$TOOLCHAIN/llvm-readelf"
-          NM="$TOOLCHAIN/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
-          if [ ! -x "$NM" ]; then
-            NM="$TOOLCHAIN/llvm-nm"
-          fi
+          NM="$TOOLCHAIN/llvm-nm"
           test -x "$READELF"
           test -x "$NM"
 
