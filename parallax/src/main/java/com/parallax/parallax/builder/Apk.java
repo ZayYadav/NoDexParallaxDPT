@@ -1,6 +1,7 @@
 package com.parallax.parallax.builder;
 
 import com.android.apksigner.ApkSignerTool;
+import com.parallax.parallax.Parallax;
 import com.parallax.parallax.config.Const;
 import com.parallax.parallax.config.ShellConfig;
 import com.parallax.parallax.res.ApkManifestEditor;
@@ -23,6 +24,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
@@ -39,6 +41,16 @@ public class Apk extends AndroidPackage {
     private static final String DEX_AUTH_COMMENT_PREFIX = "PXH1:";
     private static final String DEX_AUTH_LABEL = "Parallax/dex/authentication/v1";
     private static final int DEX_AUTH_TAG_HEX_LENGTH = 64;
+
+    // The hollow DEX contains no protected method bodies. Those bodies live in the
+    // Parallax.love sidecar and are sealed independently so extracting the APK/DEX does
+    // not reveal a reusable instruction store.
+    private static final byte[] CODE_ITEM_MAGIC = new byte[] {'P', 'C', 'I', '2'};
+    private static final String CODE_ITEM_KEY_LABEL = "Parallax/codeitem/encryption/v2/";
+    private static final byte[] CODE_ITEM_AAD =
+            "Parallax/codeitem/payload/v2".getBytes(StandardCharsets.US_ASCII);
+    private static final int CODE_ITEM_NONCE_SIZE = 12;
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     public static class Builder extends AndroidPackage.Builder {
         @Override
@@ -226,6 +238,37 @@ public class Apk extends AndroidPackage {
         Files.write(compact.toPath(), zipBytes);
     }
 
+    private static void sealCodeItemPayload(Apk apk, String packageDir, byte[] encKey) throws IOException {
+        File codeItemFile = new File(apk.getOutAssetsDir(packageDir), Const.KEY_CODE_ITEM_STORE_NAME);
+        if (!codeItemFile.isFile()) {
+            throw new IOException("Protected code-item payload is missing: " + codeItemFile);
+        }
+
+        String buildKey = Parallax.getBuildKey();
+        if (buildKey == null || buildKey.isEmpty()) {
+            throw new IOException("Parallax build key is missing; cannot seal code-item payload");
+        }
+
+        byte[] plaintext = Files.readAllBytes(codeItemFile.toPath());
+        byte[] payloadKey = CryptoUtils.hmacSha256(encKey, CODE_ITEM_KEY_LABEL + buildKey);
+        byte[] nonce = new byte[CODE_ITEM_NONCE_SIZE];
+        SECURE_RANDOM.nextBytes(nonce);
+        byte[] ciphertext = CryptoUtils.aesGcmEncrypt(payloadKey, nonce, CODE_ITEM_AAD, plaintext);
+
+        byte[] envelope = new byte[CODE_ITEM_MAGIC.length + nonce.length + ciphertext.length];
+        int cursor = 0;
+        System.arraycopy(CODE_ITEM_MAGIC, 0, envelope, cursor, CODE_ITEM_MAGIC.length);
+        cursor += CODE_ITEM_MAGIC.length;
+        System.arraycopy(nonce, 0, envelope, cursor, nonce.length);
+        cursor += nonce.length;
+        System.arraycopy(ciphertext, 0, envelope, cursor, ciphertext.length);
+
+        Files.write(codeItemFile.toPath(), envelope);
+        Arrays.fill(plaintext, (byte) 0);
+        Arrays.fill(payloadKey, (byte) 0);
+        LogUtils.info("Protected method-body vault sealed with AES-256-GCM: %d bytes", envelope.length);
+    }
+
     /**
      * Re-encode the hollowed protected DEX archive with BEST_COMPRESSION and a keyed
      * HMAC-SHA256 ZIP comment before it is appended behind the one-class bootstrap DEX.
@@ -384,6 +427,7 @@ public class Apk extends AndroidPackage {
 
             String assetsPath = apk.getOutAssetsDir(apkMainProcessPath).getAbsolutePath();
             apk.extractDexCode(apkMainProcessPath, assetsPath);
+            sealCodeItemPayload(apk, apkMainProcessPath, encKey);
             apk.addJunkCodeDex(apkMainProcessPath);
             apk.compressDexFiles(apkMainProcessPath);
             compactDexPayload(apk, apkMainProcessPath, encKey);
