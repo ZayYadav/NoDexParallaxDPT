@@ -114,10 +114,10 @@ jobs:
           echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
           echo "- class definitions: ${CLASS_DEFS}" >> "$GITHUB_STEP_SUMMARY"
 
-          # Six source-level stub components are required; R8 may add a small number of
-          # synthetic classes (for desugaring/lambdas). Keep the resulting bootstrap tightly bounded.
-          if [ "$CLASS_DEFS" -lt 6 ] || [ "$CLASS_DEFS" -gt 16 ]; then
-            echo "Expected a compact protection bootstrap with 6-16 class definitions, got ${CLASS_DEFS}" >&2
+          # The deterministic stub map deliberately retains the two named security anchors.
+          # R8 may still synthesize a small number of helper/desugaring classes.
+          if [ "$CLASS_DEFS" -lt 6 ] || [ "$CLASS_DEFS" -gt 20 ]; then
+            echo "Expected a compact protection bootstrap with 6-20 class definitions, got ${CLASS_DEFS}" >&2
             exit 1
           fi
 
@@ -125,6 +125,21 @@ jobs:
             echo "Protection bootstrap DEX is larger than 128 KiB (${DEX_SIZE} bytes)" >&2
             exit 1
           fi
+
+          STRINGS="$RUNNER_TEMP/release-shell-strings.txt"
+          strings "$DEX" > "$STRINGS"
+          for name in Parallax1 Parallax2 Parallax3 JangamBhai Darkdevel; do
+            grep -Fq "$name" "$STRINGS" || {
+              echo "Mapped release stub class missing from shell DEX: $name" >&2
+              exit 1
+            }
+          done
+          for old in ParallaxKiSettingKarwaDo ParallaxKoLadkiChahiye ParallaxGate JangamMeraBhaiHai ParallaxHuYaarBhai; do
+            if grep -Fq "Lcom/parallax/shell/${old};" "$STRINGS"; then
+              echo "Old stub class descriptor leaked into release DEX: $old" >&2
+              exit 1
+            fi
+          done
 
           for abi in arm arm64; do
             test -s "executable/shell-files/libs/${abi}/ParallaxLover.so"
@@ -151,7 +166,10 @@ jobs:
           set -euo pipefail
           TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           READELF="$TOOLCHAIN/llvm-readelf"
-          NM="$TOOLCHAIN/llvm-nm"
+          NM="$TOOLCHAIN/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+          if [ ! -x "$NM" ]; then
+            NM="$TOOLCHAIN/llvm-nm"
+          fi
           test -x "$READELF"
           test -x "$NM"
 
