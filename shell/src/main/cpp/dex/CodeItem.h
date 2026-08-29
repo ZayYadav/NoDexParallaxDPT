@@ -14,6 +14,7 @@ namespace parallax::data {
             uint32_t mOffsetDex;
             uint32_t mInsnsSize;
             uint64_t mRuntimeNonce;
+            uint8_t mRuntimeTag[16];
             uint8_t *mInsns;
         public:
             uint32_t getMethodIdx() const;
