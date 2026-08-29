@@ -103,25 +103,27 @@ jobs:
           STRINGS="$RUNNER_TEMP/shell-dex-strings.txt"
           strings "$DEX" > "$STRINGS"
 
-          for name in Parallax1 Parallax2 Parallax3 JangamBhai Darkdevel; do
+          for i in $(seq 1 14); do
+            name="Parallax${i}"
             grep -Fq "$name" "$STRINGS" || {
               echo "Expected mapped stub class is missing: $name" >&2
               exit 1
             }
           done
-          grep -Fq 'Lparallax/vm/Parallax16;' "$STRINGS" || {
-            echo "Fixed high-value VM bridge is missing: parallax.vm.Parallax16" >&2
+          for name in JangamBhai DarkDevel Keshav CrackWarTeamMC; do
+            grep -Fq "$name" "$STRINGS" || {
+              echo "Expected named stub class is missing: $name" >&2
+              exit 1
+            }
+          done
+          grep -Fq 'LParallax/Enc/CrackWarTeamMC;' "$STRINGS" || {
+            echo "High-value VM bridge is missing: Parallax.Enc.CrackWarTeamMC" >&2
             exit 1
           }
 
-          for old in \
-            ParallaxKiSettingKarwaDo \
-            ParallaxKoLadkiChahiye \
-            ParallaxGate \
-            JangamMeraBhaiHai \
-            ParallaxHuYaarBhai; do
-            if grep -Fq "Lcom/parallax/shell/${old};" "$STRINGS"; then
-              echo "Old stub class descriptor leaked into release DEX: $old" >&2
+          for banned in 'Lparallax/vm/' 'Lcom/parallax/shell/' 'Lcom/parallax/protection/'; do
+            if grep -Fq "$banned" "$STRINGS"; then
+              echo "Legacy release namespace leaked into shell DEX: $banned" >&2
               exit 1
             fi
           done
@@ -243,8 +245,8 @@ jobs:
           "$AAPT2" dump xmltree "$APK" --file AndroidManifest.xml > "$MANIFEST_DUMP"
           unzip -p "$APK" classes.dex | strings > "$DEX_STRINGS"
 
-          EXPECTED_APP="com.parallax.protection.Parallax1"
-          EXPECTED_FACTORY="com.parallax.protection.Parallax2"
+          EXPECTED_APP="Parallax.Enc.Parallax1"
+          EXPECTED_FACTORY="Parallax.Enc.Parallax2"
 
           grep -Fq "$EXPECTED_APP" "$MANIFEST_DUMP" || {
             echo "Protected manifest does not point to the mapped bootstrap Application: $EXPECTED_APP" >&2
@@ -257,28 +259,35 @@ jobs:
             exit 1
           }
 
-          for name in Parallax1 Parallax2 Parallax3 JangamBhai Darkdevel; do
+          for i in $(seq 1 14); do
+            name="Parallax${i}"
             grep -Fq "$name" "$DEX_STRINGS" || {
               echo "Mapped protection class is absent from protected classes.dex: $name" >&2
               exit 1
             }
           done
-          grep -Fq 'Lparallax/vm/Parallax16;' "$DEX_STRINGS" || {
-            echo "Fixed high-value VM bridge is absent from protected classes.dex" >&2
+          for name in JangamBhai DarkDevel Keshav CrackWarTeamMC; do
+            grep -Fq "$name" "$DEX_STRINGS" || {
+              echo "Named protection class is absent from protected classes.dex: $name" >&2
+              exit 1
+            }
+          done
+          grep -Fq 'LParallax/Enc/CrackWarTeamMC;' "$DEX_STRINGS" || {
+            echo "High-value VM bridge is absent from protected classes.dex" >&2
             exit 1
           }
 
-          for old in ParallaxKiSettingKarwaDo ParallaxKoLadkiChahiye ParallaxGate JangamMeraBhaiHai ParallaxHuYaarBhai; do
-            if grep -Fq "Lcom/parallax/protection/${old};" "$DEX_STRINGS"; then
-              echo "Old protection class descriptor leaked into protected APK: $old" >&2
+          for banned in 'Lparallax/vm/' 'Lcom/parallax/shell/' 'Lcom/parallax/protection/'; do
+            if grep -Fq "$banned" "$DEX_STRINGS"; then
+              echo "Legacy protection namespace leaked into protected APK: $banned" >&2
               exit 1
             fi
           done
 
           echo "- Bootstrap Application: $EXPECTED_APP" >> "$GITHUB_STEP_SUMMARY"
           echo "- Component factory: $EXPECTED_FACTORY" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Stub series: Parallax1/2/3 + JangamBhai + Darkdevel verified" >> "$GITHUB_STEP_SUMMARY"
-          echo "- High-value VM bridge: parallax.vm.Parallax16 verified" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Release namespace: Parallax.Enc only" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Named anchors: JangamBhai / DarkDevel / Keshav / CrackWarTeamMC verified" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload protected APK
         uses: actions/upload-artifact@v4
