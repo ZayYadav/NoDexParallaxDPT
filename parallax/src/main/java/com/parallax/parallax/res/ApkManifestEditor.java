@@ -12,31 +12,30 @@ import pxb.android.axml.AxmlParser;
  * @author parallax
  */
 public class ApkManifestEditor {
-    public static void writeApplicationName(String inManifestFile, String outManifestFile, String newApplicationName){
-        if (newApplicationName != null) {
-            int lastDot = newApplicationName.lastIndexOf('.');
-            if (lastDot > 0) {
-                newApplicationName = newApplicationName.substring(0, lastDot + 1)
-                        + "ParallaxKiSettingKarwaDo";
-            }
+
+    private static String requireClassName(String value, String label) {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException(label + " must not be empty");
         }
+        return value.trim();
+    }
+
+    public static void writeApplicationName(String inManifestFile, String outManifestFile, String newApplicationName){
+        String applicationName = requireClassName(newApplicationName, "Application class name");
         ModificationProperty property = new ModificationProperty();
-        property.addApplicationAttribute(new AttributeItem(NodeValue.Application.NAME,newApplicationName));
+        // The caller already resolves the release ABI name (for example
+        // Parallax.Enc.Parallax1). Never rewrite it back to a source/legacy class.
+        property.addApplicationAttribute(new AttributeItem(NodeValue.Application.NAME, applicationName));
         property.addUsesPermission("android.permission.INTERNET");
         FileProcesser.processManifestFile(inManifestFile, outManifestFile, property);
     }
 
     public static void writeAppComponentFactory(String inManifestFile, String outManifestFile, String newComponentFactory){
-        String applicationName = getApplicationName(inManifestFile);
-        if (applicationName != null && applicationName.endsWith(".ParallaxKiSettingKarwaDo")) {
-            int lastDot = applicationName.lastIndexOf('.');
-            if (lastDot > 0) {
-                newComponentFactory = applicationName.substring(0, lastDot + 1)
-                        + "ParallaxKoLadkiChahiye";
-            }
-        }
+        String componentFactory = requireClassName(newComponentFactory, "AppComponentFactory class name");
         ModificationProperty property = new ModificationProperty();
-        property.addApplicationAttribute(new AttributeItem("appComponentFactory",newComponentFactory));
+        // Keep the factory name exactly aligned with the class emitted into the release
+        // shell DEX (for example Parallax.Enc.Parallax2).
+        property.addApplicationAttribute(new AttributeItem("appComponentFactory", componentFactory));
         FileProcesser.processManifestFile(inManifestFile, outManifestFile, property);
     }
 
@@ -77,7 +76,6 @@ public class ApkManifestEditor {
 
     public static String getAppComponentFactory(String file) {
         String attributeValue = getAttributeValue(file, "application", "android", "appComponentFactory");
-        attributeValue = attributeValue == null ? getAttributeValue(file, "application", "android", "appComponentFactory") : attributeValue;
         attributeValue = attributeValue == null ? getAttributeValue(file, "application", null,"appComponentFactory") : attributeValue;
         return attributeValue;
     }
