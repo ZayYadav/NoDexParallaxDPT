@@ -73,40 +73,48 @@ uint64_t newRuntimeNonce(const void *itemAddress, uint32_t methodIdx) {
     return nonce;
 }
 
-void runtimeCrypt(uint32_t methodIdx,
+bool runtimeCrypt(uint32_t methodIdx,
                   uint64_t runtimeNonce,
                   const uint8_t *input,
                   uint8_t *output,
                   size_t length) {
     if (input == nullptr || output == nullptr || length == 0) {
-        return;
+        return false;
     }
     std::call_once(g_runtime_key_once, initRuntimeKey);
 
-    size_t offset = 0;
-    uint32_t blockCounter = 0;
-    while (offset < length) {
-        uint8_t blockInput[16] = {0};
-        memcpy(blockInput, &methodIdx, sizeof(methodIdx));
-        memcpy(blockInput + 4, &blockCounter, sizeof(blockCounter));
-        memcpy(blockInput + 8, &runtimeNonce, sizeof(runtimeNonce));
-        auto stream = hmac_sha256(g_runtime_key.data(),
-                                  g_runtime_key.size(),
-                                  blockInput,
-                                  sizeof(blockInput));
-        secure_zero(blockInput, sizeof(blockInput));
-        if (stream.empty()) {
-            return;
-        }
-        const size_t remaining = length - offset;
-        const size_t take = remaining < stream.size() ? remaining : stream.size();
-        for (size_t i = 0; i < take; ++i) {
-            output[offset + i] = static_cast<uint8_t>(input[offset + i] ^ stream[i]);
-        }
-        secure_zero(stream.data(), stream.size());
-        offset += take;
-        ++blockCounter;
+    // AES-CTR is intentionally used only for this transient in-process re-wrap. The
+    // persistent APK payload is AES-GCM authenticated. Here we need a fast reversible
+    // stream so the long-lived method vault is not directly reusable while avoiding the
+    // huge cost of one HMAC per tiny block on large applications.
+    mbedtls_aes_context ctx;
+    mbedtls_aes_init(&ctx);
+    int ret = mbedtls_aes_setkey_enc(&ctx, g_runtime_key.data(), 256);
+    if (ret != 0) {
+        mbedtls_aes_free(&ctx);
+        return false;
     }
+
+    uint8_t nonceCounter[16] = {0};
+    memcpy(nonceCounter, &runtimeNonce, sizeof(runtimeNonce));
+    memcpy(nonceCounter + 8, &methodIdx, sizeof(methodIdx));
+    const uint32_t domain = 0x32545850u; // "PXT2" domain separator, little-endian.
+    memcpy(nonceCounter + 12, &domain, sizeof(domain));
+
+    uint8_t streamBlock[16] = {0};
+    size_t nonceOffset = 0;
+    ret = mbedtls_aes_crypt_ctr(&ctx,
+                                length,
+                                &nonceOffset,
+                                nonceCounter,
+                                streamBlock,
+                                input,
+                                output);
+
+    secure_zero(nonceCounter, sizeof(nonceCounter));
+    secure_zero(streamBlock, sizeof(streamBlock));
+    mbedtls_aes_free(&ctx);
+    return ret == 0;
 }
 } // namespace
 
@@ -135,7 +143,10 @@ uint8_t *parallax::data::CodeItem::getInsns() const {
         secure_zero(scratch.data(), scratch.size());
     }
     scratch.resize(mInsnsSize);
-    runtimeCrypt(mMethodIdx, mRuntimeNonce, mInsns, scratch.data(), mInsnsSize);
+    if (!runtimeCrypt(mMethodIdx, mRuntimeNonce, mInsns, scratch.data(), mInsnsSize)) {
+        secure_zero(scratch.data(), scratch.size());
+        return nullptr;
+    }
     return scratch.data();
 }
 
@@ -153,8 +164,11 @@ parallax::data::CodeItem::CodeItem(uint32_t methodIdx, uint32_t size,
     // per-process wrapped representation in place. getInsns() reverses it on demand.
     if (mInsns != nullptr && mInsnsSize != 0) {
         std::vector<uint8_t> wrapped(mInsnsSize);
-        runtimeCrypt(mMethodIdx, mRuntimeNonce, mInsns, wrapped.data(), wrapped.size());
-        memcpy(mInsns, wrapped.data(), wrapped.size());
+        if (runtimeCrypt(mMethodIdx, mRuntimeNonce, mInsns, wrapped.data(), wrapped.size())) {
+            memcpy(mInsns, wrapped.data(), wrapped.size());
+        } else {
+            mInsnsSize = 0;
+        }
         secure_zero(wrapped.data(), wrapped.size());
     }
 }
