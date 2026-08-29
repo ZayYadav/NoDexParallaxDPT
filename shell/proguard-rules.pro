@@ -10,14 +10,32 @@
 # while the release DEX uses Parallax1..Parallax15 plus JangamBhai and Darkdevel.
 -applymapping stub-obfuscation.map
 
-# Framework/JNI entry classes must survive shrinking but their class names are deliberately
-# allowed to follow the mapping above.
--keep,allowoptimization,allowobfuscation class com.parallax.shell.ParallaxKiSettingKarwaDo
--keep,allowoptimization,allowobfuscation class com.parallax.shell.ParallaxKoLadkiChahiye
--keep,allowoptimization,allowobfuscation class com.parallax.shell.ParallaxGate
+# Keep every requested stub class as a distinct class boundary. `allowobfuscation` lets
+# -applymapping assign the final names, while deliberately NOT allowing class-level
+# optimization prevents R8 horizontal/vertical class merging from deleting Parallax2,
+# Parallax3 or any of the named anchors. Ordinary member code can still be optimized and
+# renamed unless an ABI rule below pins it.
+-keep,allowobfuscation class com.parallax.shell.ParallaxKiSettingKarwaDo
+-keep,allowobfuscation class com.parallax.shell.ParallaxKoLadkiChahiye
+-keep,allowobfuscation class com.parallax.shell.ParallaxGate
+-keep,allowobfuscation class com.parallax.shell.Global
+-keep,allowobfuscation class com.parallax.shell.Parallax
+-keep,allowobfuscation class com.parallax.shell.ParallaxBhaiKiSecurity
+-keep,allowobfuscation class com.parallax.shell.ParallaxBhaiya
+-keep,allowobfuscation class com.parallax.shell.ParallaxDialogBhaiya
+-keep,allowobfuscation class com.parallax.shell.ParallaxHu
+-keep,allowobfuscation class com.parallax.shell.ParallaxHuMaalik
+-keep,allowobfuscation class com.parallax.shell.ParallaxJaRaha
+-keep,allowobfuscation class com.parallax.shell.ParallaxKaBhaiJangu
+-keep,allowobfuscation class com.parallax.shell.ParallaxKiShadiKarwaDo
+-keep,allowobfuscation class com.parallax.shell.ParallaxLovers
+-keep,allowobfuscation class com.parallax.shell.ParallaxVirtualBhaiya
+-keep,allowobfuscation class com.parallax.shell.JangamMeraBhaiHai
+-keep,allowobfuscation class com.parallax.shell.ParallaxHuYaarBhai
 
-# The packer injects calls to Parallax3.g(...) into the original app DEX. Keep the method
-# name/signature stable while allowing the containing class itself to become Parallax3.
+# The packer injects calls to Parallax3.g(...) into the ORIGINAL app DEX. That caller is
+# outside R8's program graph, so both the mapped class boundary and the member name/signature
+# are external ABI and must stay exact.
 -keepclassmembers class com.parallax.shell.ParallaxGate {
     public static void g(int, int, int, int);
 }
@@ -31,20 +49,15 @@
     protected *** *(...);
 }
 
-# Preserve framework entry methods for the mapped component factory. Internal helpers can
-# still be optimized/renamed by R8.
+# Preserve framework entry methods for the mapped component factory. The class itself is
+# kept distinct above so Android can instantiate Parallax2 from the protected manifest.
 -keepclassmembers class com.parallax.shell.ParallaxKoLadkiChahiye {
     public <init>();
     public *** instantiate*(...);
 }
 
-# Explicit special anchors requested for the final stub DEX. They may be optimized but are
-# retained and class-obfuscated according to stub-obfuscation.map.
--keep,allowoptimization,allowobfuscation class com.parallax.shell.JangamMeraBhaiHai
--keep,allowoptimization,allowobfuscation class com.parallax.shell.ParallaxHuYaarBhai
-
-# Existing hand-written state machines are kept as source-level opaque control flow. R8 is
-# still free to optimize ordinary helpers and rename non-ABI members.
+# Existing hand-written state machines remain opaque at source level. Non-ABI members in
+# other classes are still eligible for R8 name shrinking/optimization.
 -keepclassmembers,allowobfuscation class com.parallax.shell.ParallaxKiSettingKarwaDo {
     private void prepare(android.content.Context);
     private void replaceApplication();
