@@ -8,7 +8,9 @@ import android.os.Process;
 
 /** Generic debugger/tamper block screen with fail-closed app-process quarantine. */
 public class ParallaxBhaiKiSecurity extends Activity {
-    private static final long QUARANTINE_DELAY_MS = 900L;
+    // Give the user enough time to read and acknowledge the incompatibility dialog.
+    // If they leave it open, the protected app still fail-closes automatically.
+    private static final long QUARANTINE_DELAY_MS = 15_000L;
 
     private final Handler quarantineHandler = new Handler(Looper.getMainLooper());
     private final Runnable quarantine = new Runnable() {
@@ -24,7 +26,8 @@ public class ParallaxBhaiKiSecurity extends Activity {
             }
 
             // Defensive response only: terminate this protected app process. Never write
-            // junk data, fill storage, damage hardware, or touch other apps/processes.
+            // junk data, fill storage/RAM, heat the device, damage hardware, or touch
+            // other apps/processes.
             Process.killProcess(Process.myPid());
             System.exit(173);
         }
@@ -47,6 +50,12 @@ public class ParallaxBhaiKiSecurity extends Activity {
     private void armQuarantine() {
         quarantineHandler.removeCallbacks(quarantine);
         quarantineHandler.postDelayed(quarantine, QUARANTINE_DELAY_MS);
+    }
+
+    @Override
+    protected void onDestroy() {
+        quarantineHandler.removeCallbacks(quarantine);
+        super.onDestroy();
     }
 
     @Override
