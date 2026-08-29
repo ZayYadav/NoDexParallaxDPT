@@ -9,6 +9,7 @@
 #include <mutex>
 #include <random>
 #include <unistd.h>
+#include <vector>
 
 #include "parallax_crypto.h"
 
@@ -17,6 +18,7 @@ extern uint8_t PARALLAX_UNKNOWN_DATA[];
 namespace {
 std::once_flag g_runtime_key_once;
 std::array<uint8_t, 32> g_runtime_key{};
+std::atomic<uint64_t> g_runtime_nonce_counter{1};
 
 void initRuntimeKey() {
     // Mix fresh process entropy through the already build-bound native secret. This key
@@ -51,7 +53,28 @@ void initRuntimeKey() {
     }
 }
 
+uint64_t newRuntimeNonce(const void *itemAddress, uint32_t methodIdx) {
+    std::call_once(g_runtime_key_once, initRuntimeKey);
+    const uint64_t sequence = g_runtime_nonce_counter.fetch_add(1, std::memory_order_relaxed);
+    const uintptr_t address = reinterpret_cast<uintptr_t>(itemAddress);
+    uint8_t material[24] = {0};
+    memcpy(material, &sequence, sizeof(sequence));
+    memcpy(material + 8, &address, sizeof(address) < 8 ? sizeof(address) : 8);
+    memcpy(material + 16, &methodIdx, sizeof(methodIdx));
+    const uint32_t pid = static_cast<uint32_t>(getpid());
+    memcpy(material + 20, &pid, sizeof(pid));
+    auto digest = hmac_sha256(g_runtime_key.data(), g_runtime_key.size(), material, sizeof(material));
+    secure_zero(material, sizeof(material));
+    uint64_t nonce = sequence;
+    if (digest.size() >= sizeof(nonce)) {
+        memcpy(&nonce, digest.data(), sizeof(nonce));
+        secure_zero(digest.data(), digest.size());
+    }
+    return nonce;
+}
+
 void runtimeCrypt(uint32_t methodIdx,
+                  uint64_t runtimeNonce,
                   const uint8_t *input,
                   uint8_t *output,
                   size_t length) {
@@ -63,13 +86,15 @@ void runtimeCrypt(uint32_t methodIdx,
     size_t offset = 0;
     uint32_t blockCounter = 0;
     while (offset < length) {
-        uint8_t blockInput[8] = {0};
+        uint8_t blockInput[16] = {0};
         memcpy(blockInput, &methodIdx, sizeof(methodIdx));
-        memcpy(blockInput + sizeof(methodIdx), &blockCounter, sizeof(blockCounter));
+        memcpy(blockInput + 4, &blockCounter, sizeof(blockCounter));
+        memcpy(blockInput + 8, &runtimeNonce, sizeof(runtimeNonce));
         auto stream = hmac_sha256(g_runtime_key.data(),
                                   g_runtime_key.size(),
                                   blockInput,
                                   sizeof(blockInput));
+        secure_zero(blockInput, sizeof(blockInput));
         if (stream.empty()) {
             return;
         }
@@ -110,7 +135,7 @@ uint8_t *parallax::data::CodeItem::getInsns() const {
         secure_zero(scratch.data(), scratch.size());
     }
     scratch.resize(mInsnsSize);
-    runtimeCrypt(mMethodIdx, mInsns, scratch.data(), mInsnsSize);
+    runtimeCrypt(mMethodIdx, mRuntimeNonce, mInsns, scratch.data(), mInsnsSize);
     return scratch.data();
 }
 
@@ -119,12 +144,16 @@ void parallax::data::CodeItem::setInsns(uint8_t *insns) {
 }
 
 parallax::data::CodeItem::CodeItem(uint32_t methodIdx, uint32_t size,
-                   uint8_t *insns): mMethodIdx(methodIdx), mOffsetDex(0), mInsnsSize(size), mInsns(insns) {
+                   uint8_t *insns): mMethodIdx(methodIdx),
+                                    mOffsetDex(0),
+                                    mInsnsSize(size),
+                                    mRuntimeNonce(newRuntimeNonce(this, methodIdx)),
+                                    mInsns(insns) {
     // Symmetric stream operation: constructor converts builder-XOR bytes into the
     // per-process wrapped representation in place. getInsns() reverses it on demand.
     if (mInsns != nullptr && mInsnsSize != 0) {
         std::vector<uint8_t> wrapped(mInsnsSize);
-        runtimeCrypt(mMethodIdx, mInsns, wrapped.data(), wrapped.size());
+        runtimeCrypt(mMethodIdx, mRuntimeNonce, mInsns, wrapped.data(), wrapped.size());
         memcpy(mInsns, wrapped.data(), wrapped.size());
         secure_zero(wrapped.data(), wrapped.size());
     }
