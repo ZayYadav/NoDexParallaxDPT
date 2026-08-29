@@ -110,9 +110,9 @@ public class ReflectionClinitInjectorTest {
         ), opcodes(added));
         assertEquals(4, added.getImplementation().getRegisterCount());
 
-        List<? extends Instruction> instructions = new ArrayList<>();
+        List<Instruction> instructions = new ArrayList<>();
         for (Instruction instruction : added.getImplementation().getInstructions()) {
-            ((ArrayList<Instruction>) instructions).add(instruction);
+            instructions.add(instruction);
         }
         ReferenceInstruction invoke = (ReferenceInstruction) instructions.get(4);
         MethodReference target = (MethodReference) invoke.getReference();
