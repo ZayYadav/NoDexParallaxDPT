@@ -40,7 +40,12 @@ android {
             debuggable false
             jniDebuggable false
             minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // The Android default optimize file contains a generic JNI keep-name rule.
+            // That rule overrides our deterministic -applymapping for every class that
+            // declares a native method (notably the Parallax1 bootstrap ABI). The shell
+            // owns its complete release keep contract in proguard-rules.pro, including
+            // exact JNI member-name retention, so do not import that conflicting rule.
+            proguardFiles 'proguard-rules.pro'
             ndk {
                 debugSymbolLevel 'none'
             }
