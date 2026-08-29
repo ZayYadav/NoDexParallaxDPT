@@ -57,8 +57,6 @@ public final class HighValueVmCoordinator {
         }
 
         List<File> dexFiles = new ArrayList<>(Arrays.asList(candidates));
-        // Deterministic ordering is all method IDs require; lexical ordering also handles
-        // unusual multidex names without depending on a parser helper's visibility/API.
         dexFiles.sort(Comparator.comparing(File::getName));
         List<HighValueVmTransformer.Rule> rules = HighValueVmTransformer.loadRules(rulesPath);
         List<HighValueVmTransformer.Program> programs = new ArrayList<>();
@@ -91,9 +89,9 @@ public final class HighValueVmCoordinator {
             throw new IOException("Cannot create assets directory for high-value VM payload");
         }
         File payload = new File(assets, "Parallax.vm");
-        HighValueVmTransformer.writeEncryptedPayload(payload, programs, encKey);
+        HighValueVmFourLayerCodec.writeEncryptedPayload(payload, programs, encKey);
         prepared = true;
-        LogUtils.info("High-value VM prepared before DPT extraction: %d method(s)", programs.size());
+        LogUtils.info("High-value 4-layer VM prepared before DPT extraction: %d method(s)", programs.size());
         return programs.size();
     }
 }
