@@ -20,6 +20,7 @@ constexpr size_t CODE_ITEM_MAGIC_SIZE = sizeof(CODE_ITEM_MAGIC);
 constexpr size_t CODE_ITEM_NONCE_SIZE = 12;
 constexpr size_t CODE_ITEM_GCM_TAG_SIZE = 16;
 constexpr uint8_t INVALID_CODE_ITEM_BUFFER[4] = {0, 0, 0, 0};
+constexpr uint32_t MAX_METHOD_INDEX = 65535u;
 
 bool isSealedCodeItem(const uint8_t *buffer, size_t size) {
     return buffer != nullptr
@@ -59,6 +60,11 @@ uint8_t *allocateProtectedVault(const uint8_t *plaintext, size_t size) {
     (void) madvise(mapping, size, MADV_DONTDUMP);
 #endif
     return static_cast<uint8_t *>(mapping);
+}
+
+parallax::data::CodeItem *invalidCodeItem() {
+    reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+    return new parallax::data::CodeItem(0, 0, nullptr);
 }
 } // namespace
 
@@ -179,35 +185,79 @@ uint16_t parallax::data::MultiDexCode::readDexCount(){
 }
 
 uint32_t* parallax::data::MultiDexCode::readDexCodeIndex(int* count){
-    uint16_t dexCount = readDexCount();
+    if (count == nullptr || m_buffer == nullptr || m_size < 4) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        if (count != nullptr) {
+            *count = 0;
+        }
+        return nullptr;
+    }
+
+    const uint16_t dexCount = readDexCount();
+    const size_t indexBytes = static_cast<size_t>(dexCount) * sizeof(uint32_t);
+    if (indexBytes > m_size - 4) {
+        DLOGE("runtime vault DEX index table exceeds payload");
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        *count = 0;
+        return reinterpret_cast<uint32_t *>(m_buffer + 4);
+    }
+
     *count = dexCount;
-    return (uint32_t*)(m_buffer + 4);
+    return reinterpret_cast<uint32_t *>(m_buffer + 4);
 }
 
 parallax::data::CodeItem* parallax::data::MultiDexCode::nextCodeItem(uint32_t* offset) {
-    uint32_t methodIdx = readUInt32(*offset);
-    uint32_t insnsSize = readUInt32(*offset + 4);
-    auto* insns = (uint8_t*)(m_buffer + *offset + 8);
-    *offset = (*offset + 8 + insnsSize);
-    auto* codeItem = new CodeItem(methodIdx, insnsSize, insns);
+    if (offset == nullptr || m_buffer == nullptr || *offset > m_size || m_size - *offset < 8) {
+        DLOGE("runtime vault code-item header exceeds payload");
+        return invalidCodeItem();
+    }
 
-    return codeItem;
+    const uint32_t itemOffset = *offset;
+    const uint32_t methodIdx = readUInt32(itemOffset);
+    const uint32_t insnsSize = readUInt32(itemOffset + 4);
+    const size_t insnsOffset = static_cast<size_t>(itemOffset) + 8u;
+    if (methodIdx > MAX_METHOD_INDEX
+            || insnsOffset > m_size
+            || static_cast<size_t>(insnsSize) > m_size - insnsOffset) {
+        DLOGE("runtime vault code-item metadata is invalid");
+        *offset = static_cast<uint32_t>(m_size > UINT32_MAX ? UINT32_MAX : m_size);
+        return invalidCodeItem();
+    }
+
+    auto* insns = m_buffer + insnsOffset;
+    const size_t nextOffset = insnsOffset + static_cast<size_t>(insnsSize);
+    *offset = static_cast<uint32_t>(nextOffset);
+    return new CodeItem(methodIdx, insnsSize, insns);
 }
 
 uint8_t parallax::data::MultiDexCode::readUInt8(uint32_t offset){
     uint8_t t = 0;
+    if (m_buffer == nullptr || static_cast<size_t>(offset) >= m_size) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return t;
+    }
     memcpy(&t, m_buffer + offset, sizeof(uint8_t));
     return t;
 }
 
 uint16_t parallax::data::MultiDexCode::readUInt16(uint32_t offset){
     uint16_t t = 0;
+    const size_t off = static_cast<size_t>(offset);
+    if (m_buffer == nullptr || off > m_size || m_size - off < sizeof(uint16_t)) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return t;
+    }
     memcpy(&t, m_buffer + offset, sizeof(uint16_t));
     return t;
 }
 
 uint32_t parallax::data::MultiDexCode::readUInt32(uint32_t offset){
     uint32_t t = 0;
+    const size_t off = static_cast<size_t>(offset);
+    if (m_buffer == nullptr || off > m_size || m_size - off < sizeof(uint32_t)) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return t;
+    }
     memcpy(&t, m_buffer + offset, sizeof(uint32_t));
     return t;
 }
