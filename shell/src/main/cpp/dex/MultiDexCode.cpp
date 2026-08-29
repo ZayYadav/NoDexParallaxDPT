@@ -4,9 +4,11 @@
 
 #include "MultiDexCode.h"
 
+#include <limits>
 #include <string>
 #include <utility>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include "common/obfuscate.h"
 #include "parallax_crypto.h"
@@ -28,38 +30,114 @@ bool isSealedCodeItem(const uint8_t *buffer, size_t size) {
            && memcmp(buffer, CODE_ITEM_MAGIC, CODE_ITEM_MAGIC_SIZE) == 0;
 }
 
-void releaseOwnedVault(uint8_t *&buffer, size_t &size) {
-    if (buffer == nullptr || size == 0) {
-        buffer = nullptr;
-        size = 0;
-        return;
-    }
-    secure_zero(buffer, size);
-    (void) munmap(buffer, size);
-    buffer = nullptr;
-    size = 0;
+size_t pageSize() {
+    const long value = sysconf(_SC_PAGESIZE);
+    return value > 0 ? static_cast<size_t>(value) : 4096u;
 }
 
-uint8_t *allocateProtectedVault(const uint8_t *plaintext, size_t size) {
-    if (plaintext == nullptr || size == 0) {
+bool roundUpToPage(size_t size, size_t *roundedOut) {
+    if (roundedOut == nullptr || size == 0) {
+        return false;
+    }
+    const size_t page = pageSize();
+    if (size > std::numeric_limits<size_t>::max() - (page - 1u)) {
+        return false;
+    }
+    *roundedOut = ((size + page - 1u) / page) * page;
+    return true;
+}
+
+void releaseOwnedVault(uint8_t *&mapping,
+                       size_t &mappingSize,
+                       uint8_t *&buffer,
+                       size_t &bufferSize) {
+    if (mapping == nullptr || mappingSize == 0) {
+        mapping = nullptr;
+        mappingSize = 0;
+        buffer = nullptr;
+        bufferSize = 0;
+        return;
+    }
+
+    if (buffer != nullptr && bufferSize != 0) {
+        size_t rounded = 0;
+        if (roundUpToPage(bufferSize, &rounded)) {
+            // The useful middle pages are normally RW, but explicitly restore write access
+            // before zeroization so this remains safe if a future hardening pass makes them RO.
+            (void) mprotect(buffer, rounded, PROT_READ | PROT_WRITE);
+            secure_zero(buffer, bufferSize);
+            (void) munlock(buffer, rounded);
+        }
+    }
+
+    (void) munmap(mapping, mappingSize);
+    mapping = nullptr;
+    mappingSize = 0;
+    buffer = nullptr;
+    bufferSize = 0;
+}
+
+uint8_t *allocateProtectedVault(const uint8_t *plaintext,
+                                size_t size,
+                                uint8_t **mappingOut,
+                                size_t *mappingSizeOut) {
+    if (plaintext == nullptr || size == 0 || mappingOut == nullptr || mappingSizeOut == nullptr) {
         return nullptr;
     }
-    void *mapping = mmap(nullptr,
-                         size,
-                         PROT_READ | PROT_WRITE,
-                         MAP_PRIVATE | MAP_ANONYMOUS,
-                         -1,
-                         0);
-    if (mapping == MAP_FAILED) {
+    *mappingOut = nullptr;
+    *mappingSizeOut = 0;
+
+    size_t dataMapSize = 0;
+    if (!roundUpToPage(size, &dataMapSize)) {
         return nullptr;
     }
-    memcpy(mapping, plaintext, size);
+
+    const size_t page = pageSize();
+    if (dataMapSize > std::numeric_limits<size_t>::max() - (page * 2u)) {
+        return nullptr;
+    }
+    const size_t totalSize = dataMapSize + page * 2u;
+
+    // Reserve the whole range as inaccessible, then open only the middle pages. The first
+    // and last pages stay PROT_NONE guard pages so linear over-read/over-write attempts hit
+    // an immediate process-local fault instead of adjacent heap/native objects.
+    void *raw = mmap(nullptr,
+                     totalSize,
+                     PROT_NONE,
+                     MAP_PRIVATE | MAP_ANONYMOUS,
+                     -1,
+                     0);
+    if (raw == MAP_FAILED) {
+        return nullptr;
+    }
+
+    auto *base = static_cast<uint8_t *>(raw);
+    uint8_t *data = base + page;
+    if (mprotect(data, dataMapSize, PROT_READ | PROT_WRITE) != 0) {
+        (void) munmap(raw, totalSize);
+        return nullptr;
+    }
+
+    memcpy(data, plaintext, size);
+
 #ifdef MADV_DONTDUMP
-    // Best-effort defense in depth. PR_SET_DUMPABLE=0/core-dump blocking is also active,
-    // but keeping this dedicated vault out of dumpable VMAs removes another easy path.
-    (void) madvise(mapping, size, MADV_DONTDUMP);
+    // Keep the long-lived authenticated vault out of ordinary core/process dump paths.
+    (void) madvise(data, dataMapSize, MADV_DONTDUMP);
 #endif
-    return static_cast<uint8_t *>(mapping);
+#ifdef MADV_DONTFORK
+    // A child process does not need a clone of the protected method vault. Avoid creating
+    // a second copy through fork-style process creation where the platform supports it.
+    (void) madvise(data, dataMapSize, MADV_DONTFORK);
+#endif
+
+    // Best effort: prevent paging the sensitive runtime vault to swap. Android may reject
+    // this under a strict memlock limit; failure is non-fatal because DONTDUMP + wrapping
+    // and process dump hardening remain active.
+    (void) mlock(data, dataMapSize);
+
+    *mappingOut = base;
+    *mappingSizeOut = totalSize;
+    return data;
 }
 
 parallax::data::CodeItem *invalidCodeItem() {
@@ -92,7 +170,10 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
     }
 
     m_skip_parse = false;
-    releaseOwnedVault(m_owned_buffer, m_owned_buffer_size);
+    releaseOwnedVault(m_owned_mapping,
+                      m_owned_mapping_size,
+                      m_owned_buffer,
+                      m_owned_buffer_size);
     m_source_buffer = buffer;
     m_source_size = size;
 
@@ -153,7 +234,10 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
         return;
     }
 
-    m_owned_buffer = allocateProtectedVault(plaintext.data(), plaintext.size());
+    m_owned_buffer = allocateProtectedVault(plaintext.data(),
+                                            plaintext.size(),
+                                            &m_owned_mapping,
+                                            &m_owned_mapping_size);
     m_owned_buffer_size = plaintext.size();
     secure_zero(plaintext.data(), plaintext.size());
     plaintext.clear();
@@ -161,7 +245,9 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
 
     if (m_owned_buffer == nullptr) {
         m_owned_buffer_size = 0;
-        DLOGE("cannot allocate protected native method vault");
+        m_owned_mapping = nullptr;
+        m_owned_mapping_size = 0;
+        DLOGE("cannot allocate guarded native method vault");
         reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
         m_buffer = const_cast<uint8_t *>(INVALID_CODE_ITEM_BUFFER);
         m_size = sizeof(INVALID_CODE_ITEM_BUFFER);
@@ -170,7 +256,8 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
 
     m_buffer = m_owned_buffer;
     m_size = m_owned_buffer_size;
-    DLOGD("authenticated code-item vault opened in dedicated native pages: %zu bytes", m_size);
+    DLOGD("authenticated code-item vault opened in guarded DONTDUMP native pages: %zu bytes",
+          m_size);
 }
 
 uint16_t parallax::data::MultiDexCode::readVersion(){
