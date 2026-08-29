@@ -9,6 +9,7 @@
 #include <mutex>
 #include <random>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <vector>
 
 #include "parallax_crypto.h"
@@ -21,6 +22,24 @@ std::once_flag g_runtime_key_once;
 std::array<uint8_t, 32> g_runtime_key{};
 std::atomic<uint64_t> g_runtime_nonce_counter{1};
 constexpr size_t RUNTIME_TAG_SIZE = 16;
+
+void hardenRuntimeKeyMemory() {
+    const long rawPageSize = sysconf(_SC_PAGESIZE);
+    const size_t pageSize = rawPageSize > 0 ? static_cast<size_t>(rawPageSize) : 4096u;
+    const uintptr_t address = reinterpret_cast<uintptr_t>(g_runtime_key.data());
+    const uintptr_t pageStart = address - (address % pageSize);
+    void *page = reinterpret_cast<void *>(pageStart);
+#ifdef MADV_DONTDUMP
+    // The per-process unwrap key never needs to appear in a core/process dump. This marks
+    // the backing page non-dumpable in addition to the process-wide PR_SET_DUMPABLE guard.
+    (void) madvise(page, pageSize, MADV_DONTDUMP);
+#endif
+#ifdef MADV_DONTFORK
+    (void) madvise(page, pageSize, MADV_DONTFORK);
+#endif
+    // Best effort: keep the runtime key page resident instead of allowing it to be paged.
+    (void) mlock(page, pageSize);
+}
 
 void initRuntimeKey() {
     // Mix fresh process entropy through the already build-bound native secret. This key
@@ -45,6 +64,7 @@ void initRuntimeKey() {
     if (derived.size() == g_runtime_key.size()) {
         memcpy(g_runtime_key.data(), derived.data(), g_runtime_key.size());
         secure_zero(derived.data(), derived.size());
+        hardenRuntimeKeyMemory();
         return;
     }
 
@@ -53,6 +73,7 @@ void initRuntimeKey() {
     for (size_t i = 0; i < g_runtime_key.size(); ++i) {
         g_runtime_key[i] = static_cast<uint8_t>(random());
     }
+    hardenRuntimeKeyMemory();
 }
 
 uint64_t newRuntimeNonce(const void *itemAddress, uint32_t methodIdx) {
@@ -211,6 +232,19 @@ uint8_t *parallax::data::CodeItem::getInsns() const {
     }
 
     scratch.resize(mInsnsSize);
+#ifdef MADV_DONTDUMP
+    if (!scratch.empty()) {
+        const long rawPageSize = sysconf(_SC_PAGESIZE);
+        const size_t pageSize = rawPageSize > 0 ? static_cast<size_t>(rawPageSize) : 4096u;
+        const uintptr_t address = reinterpret_cast<uintptr_t>(scratch.data());
+        const uintptr_t start = address - (address % pageSize);
+        const uintptr_t endAddress = address + scratch.size();
+        const uintptr_t end = ((endAddress + pageSize - 1u) / pageSize) * pageSize;
+        if (end > start) {
+            (void) madvise(reinterpret_cast<void *>(start), end - start, MADV_DONTDUMP);
+        }
+    }
+#endif
     if (!runtimeCrypt(mMethodIdx, mRuntimeNonce, mInsns, scratch.data(), mInsnsSize)) {
         secure_zero(scratch.data(), scratch.size());
         reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
