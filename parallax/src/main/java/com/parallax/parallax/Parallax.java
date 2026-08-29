@@ -31,6 +31,8 @@ public class Parallax {
 
     private static final String MANIFEST_BUILD_KEY_ATTR = "Parallax-Build-Key";
     private static final String OPTION_HIGH_VALUE_METHODS = "high-value-methods";
+    private static final String OPTION_HIGH_VALUE_AUTO = "high-value-auto";
+    private static final String OPTION_HIGH_VALUE_AUTO_MAX = "high-value-auto-max";
 
     public static void main(String[] args) {
         try {
@@ -119,6 +121,12 @@ public class Parallax {
         options.addOption(new Option(null, OPTION_HIGH_VALUE_METHODS, true,
                 "Move explicitly selected static primitive methods out of DEX into the encrypted native Parallax VM. "
                         + "Rules use canonical signatures such as Lcom/example/Security;->mix(III)I. APK only.\n"));
+        options.addOption(new Option(null, OPTION_HIGH_VALUE_AUTO, false,
+                "Automatically scan every APK DEX method, virtualize every method fully supported by the 4-layer VM, "
+                        + "and leave unsupported methods on normal DPT. No manual signatures required. APK only.\n"));
+        options.addOption(new Option(null, OPTION_HIGH_VALUE_AUTO_MAX, true,
+                "Maximum methods auto mode may virtualize (1-" + HighValueVmCoordinator.MAX_VM_PROGRAMS
+                        + ", default " + HighValueVmCoordinator.MAX_VM_PROGRAMS + ").\n"));
         options.addOption(new Option(Const.OPTION_EXCLUDE_ABI, Const.OPTION_EXCLUDE_ABI_LONG, true, "Exclude specific ABIs (comma separated, e.g. x86,x86_64). \n"
                 + "Supported ABIs:\n"
                 + "- arm       (armeabi-v7a)\n"
@@ -158,7 +166,32 @@ public class Parallax {
             }
 
             String filePath = commandLine.getOptionValue(Const.OPTION_INPUT_FILE);
-            HighValueVmCoordinator.setRulesPath(commandLine.getOptionValue(OPTION_HIGH_VALUE_METHODS));
+            String highValueRules = commandLine.getOptionValue(OPTION_HIGH_VALUE_METHODS);
+            boolean highValueAuto = commandLine.hasOption(OPTION_HIGH_VALUE_AUTO);
+            if (highValueAuto && highValueRules != null && !highValueRules.trim().isEmpty()) {
+                usage(options, "Use either --high-value-auto or --high-value-methods, not both.");
+                return null;
+            }
+
+            int highValueAutoMax = HighValueVmCoordinator.MAX_VM_PROGRAMS;
+            if (commandLine.hasOption(OPTION_HIGH_VALUE_AUTO_MAX)) {
+                if (!highValueAuto) {
+                    usage(options, "--high-value-auto-max requires --high-value-auto.");
+                    return null;
+                }
+                try {
+                    highValueAutoMax = Integer.parseInt(commandLine.getOptionValue(OPTION_HIGH_VALUE_AUTO_MAX));
+                } catch (NumberFormatException e) {
+                    usage(options, "--high-value-auto-max must be an integer.");
+                    return null;
+                }
+                if (highValueAutoMax < 1 || highValueAutoMax > HighValueVmCoordinator.MAX_VM_PROGRAMS) {
+                    usage(options, "--high-value-auto-max must be between 1 and "
+                            + HighValueVmCoordinator.MAX_VM_PROGRAMS + ".");
+                    return null;
+                }
+            }
+            HighValueVmCoordinator.configure(highValueRules, highValueAuto, highValueAutoMax);
 
             int riskCheckFlags = 0;
             if (commandLine.hasOption(Const.OPTION_DISABLE_FRIDA_DETECT_LONG)) {
@@ -190,7 +223,7 @@ public class Parallax {
             }
             else if(filePath.endsWith(".aab")) {
                 if (HighValueVmCoordinator.isEnabled()) {
-                    usage(options, "--high-value-methods is currently APK-only; AAB protection is unchanged.");
+                    usage(options, "High-value VM modes are currently APK-only; AAB protection is unchanged.");
                     return null;
                 }
                 return new Aab.Builder()
@@ -214,7 +247,7 @@ public class Parallax {
             }
 
         }
-        catch (ParseException e) {
+        catch (ParseException | IllegalArgumentException e) {
             usage(options, e.toString());
         }
 
