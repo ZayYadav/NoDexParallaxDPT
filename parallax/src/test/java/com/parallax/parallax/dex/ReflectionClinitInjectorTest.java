@@ -29,7 +29,7 @@ import java.util.List;
 public class ReflectionClinitInjectorTest {
 
     @Test
-    public void preservesExistingInitializerAndAddsOnlySyntheticGate() throws Exception {
+    public void preservesExistingInitializerAndAddsEncodedSyntheticGate() throws Exception {
         ImmutableMethod existingClinit = new ImmutableMethod(
                 "Lsample/Existing;",
                 "<clinit>",
@@ -98,7 +98,15 @@ public class ReflectionClinitInjectorTest {
 
         Method added = findClinit(synthetic);
         assertNotNull(added);
-        assertEquals(List.of(Opcode.INVOKE_STATIC, Opcode.RETURN_VOID), opcodes(added));
+        assertEquals(List.of(
+                Opcode.CONST,
+                Opcode.CONST,
+                Opcode.CONST,
+                Opcode.CONST,
+                Opcode.INVOKE_STATIC,
+                Opcode.RETURN_VOID
+        ), opcodes(added));
+        assertEquals(4, added.getImplementation().getRegisterCount());
     }
 
     private static ClassDef findClass(DexBackedDexFile dex, String type) {
