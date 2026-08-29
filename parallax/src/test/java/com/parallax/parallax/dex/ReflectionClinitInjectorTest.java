@@ -12,6 +12,8 @@ import com.android.tools.smali.dexlib2.dexbacked.DexBackedDexFile;
 import com.android.tools.smali.dexlib2.iface.ClassDef;
 import com.android.tools.smali.dexlib2.iface.Method;
 import com.android.tools.smali.dexlib2.iface.instruction.Instruction;
+import com.android.tools.smali.dexlib2.iface.instruction.ReferenceInstruction;
+import com.android.tools.smali.dexlib2.iface.reference.MethodReference;
 import com.android.tools.smali.dexlib2.immutable.ImmutableClassDef;
 import com.android.tools.smali.dexlib2.immutable.ImmutableDexFile;
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethod;
@@ -80,7 +82,7 @@ public class ReflectionClinitInjectorTest {
         ReflectionClinitInjector.inject(
                 input.getAbsolutePath(),
                 output.getAbsolutePath(),
-                "Lcom/parallax/shell/ParallaxKiSettingKarwaDo;"
+                "Lcom/parallax/shell/Parallax1;"
         );
 
         DexBackedDexFile result = DexFileFactory.loadDexFile(output, Opcodes.getDefault());
@@ -107,6 +109,15 @@ public class ReflectionClinitInjectorTest {
                 Opcode.RETURN_VOID
         ), opcodes(added));
         assertEquals(4, added.getImplementation().getRegisterCount());
+
+        List<? extends Instruction> instructions = new ArrayList<>();
+        for (Instruction instruction : added.getImplementation().getInstructions()) {
+            ((ArrayList<Instruction>) instructions).add(instruction);
+        }
+        ReferenceInstruction invoke = (ReferenceInstruction) instructions.get(4);
+        MethodReference target = (MethodReference) invoke.getReference();
+        assertEquals("Lcom/parallax/shell/Parallax3;", target.getDefiningClass());
+        assertEquals("g", target.getName());
     }
 
     private static ClassDef findClass(DexBackedDexFile dex, String type) {
