@@ -98,20 +98,34 @@ final class ParallaxDialogBhaiya {
                     detail.setLineSpacing(0, 1.2f);
                     add(card, detail, 10);
 
-                    Button close = new Button(activity);
-                    close.setText(ParallaxHuYaarBhai.z(1077029238, 230, 146, 112, 218, 191, 2, 139, 138, 57));
-                    close.setAllCaps(false);
-                    close.setTextColor(Color.WHITE);
-                    close.setTextSize(15);
-                    close.setFilterTouchesWhenObscured(true);
-                    GradientDrawable buttonBg = new GradientDrawable();
-                    buttonBg.setColor(Color.rgb(216, 55, 78));
-                    buttonBg.setCornerRadius(dp(activity, 16));
-                    close.setBackground(buttonBg);
-                    close.setOnClickListener(new View.OnClickListener() {
-                        @Override public void onClick(View v) { terminate(activity); }
-                    });
-                    add(card, close, 22);
+                    LinearLayout actions = new LinearLayout(activity);
+                    actions.setOrientation(LinearLayout.HORIZONTAL);
+                    actions.setGravity(Gravity.CENTER);
+
+                    Button exit = actionButton(activity,
+                            ParallaxHuYaarBhai.z(812734551, 214, 206, 175, 72),
+                            false);
+                    Button ok = actionButton(activity,
+                            ParallaxHuYaarBhai.z(918273645, 56, 25),
+                            true);
+
+                    View.OnClickListener terminateListener = new View.OnClickListener() {
+                        @Override public void onClick(View v) {
+                            try { dialog.dismiss(); } catch (Throwable ignored) { }
+                            terminate(activity);
+                        }
+                    };
+                    exit.setOnClickListener(terminateListener);
+                    ok.setOnClickListener(terminateListener);
+
+                    LinearLayout.LayoutParams exitParams = new LinearLayout.LayoutParams(0, dp(activity, 48), 1f);
+                    exitParams.rightMargin = dp(activity, 6);
+                    actions.addView(exit, exitParams);
+
+                    LinearLayout.LayoutParams okParams = new LinearLayout.LayoutParams(0, dp(activity, 48), 1f);
+                    okParams.leftMargin = dp(activity, 6);
+                    actions.addView(ok, okParams);
+                    add(card, actions, 22);
 
                     frame.addView(card, new FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -136,6 +150,20 @@ final class ParallaxDialogBhaiya {
         });
     }
 
+    private static Button actionButton(Activity activity, String label, boolean primary) {
+        Button button = new Button(activity);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(15);
+        button.setFilterTouchesWhenObscured(true);
+        GradientDrawable buttonBg = new GradientDrawable();
+        buttonBg.setColor(primary ? Color.rgb(216, 55, 78) : Color.rgb(53, 55, 66));
+        buttonBg.setCornerRadius(dp(activity, 16));
+        button.setBackground(buttonBg);
+        return button;
+    }
+
     private static TextView text(Activity a, String value, int size, int color) {
         TextView v = new TextView(a);
         v.setText(value);
@@ -153,7 +181,12 @@ final class ParallaxDialogBhaiya {
     }
 
     private static String message(int reason) {
-        if (reason == ParallaxBhaiya.ROOT) return ParallaxHuYaarBhai.ROOT_MESSAGE;
+        if (reason == ParallaxBhaiya.ROOT || reason == ParallaxBhaiya.DEBUG_OR_TAMPER) {
+            return ParallaxHuYaarBhai.z(937451231,
+                    127, 208, 180, 20, 248, 212, 216, 221, 11, 159, 139, 107, 77,
+                    228, 73, 99, 144, 175, 141, 60, 175, 51, 16, 245, 242, 4, 72,
+                    194, 28, 221, 240, 20, 239, 113, 163, 194, 231, 33, 3);
+        }
         if (reason == ParallaxBhaiya.DEVELOPER_UNAUTHORIZED) {
             return ParallaxHuYaarBhai.z(254057330, 130, 180, 82, 196, 49, 22, 237, 102, 102, 58, 229, 68, 126, 32, 68, 255, 3, 136, 26, 65, 25, 39, 193, 74, 123, 64, 238, 6, 75, 168, 211, 210);
         }
@@ -181,8 +214,10 @@ final class ParallaxDialogBhaiya {
     }
 
     private static void terminate(Activity a) {
-        try { a.finishAndRemoveTask(); } catch (Throwable ignored) { a.finish(); }
+        try { a.finishAndRemoveTask(); } catch (Throwable ignored) {
+            try { a.finish(); } catch (Throwable ignoredAgain) { }
+        }
         Process.killProcess(Process.myPid());
-        System.exit(0);
+        System.exit(173);
     }
 }
