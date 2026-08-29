@@ -1,7 +1,6 @@
 package com.parallax.parallax.dex;
 
 import com.parallax.parallax.config.Const;
-import com.parallax.parallax.util.DexUtils;
 import com.parallax.parallax.util.LogUtils;
 
 import java.io.File;
@@ -58,7 +57,9 @@ public final class HighValueVmCoordinator {
         }
 
         List<File> dexFiles = new ArrayList<>(Arrays.asList(candidates));
-        dexFiles.sort(Comparator.comparingInt(file -> DexUtils.getDexNumber(file.getName())));
+        // Deterministic ordering is all method IDs require; lexical ordering also handles
+        // unusual multidex names without depending on a parser helper's visibility/API.
+        dexFiles.sort(Comparator.comparing(File::getName));
         List<HighValueVmTransformer.Rule> rules = HighValueVmTransformer.loadRules(rulesPath);
         List<HighValueVmTransformer.Program> programs = new ArrayList<>();
         int nextId = 1;
