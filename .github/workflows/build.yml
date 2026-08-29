@@ -46,7 +46,6 @@ jobs:
             echo "$(basename "$path"): $(git -C "$path" rev-parse HEAD)"
           }
 
-          # Match the revisions currently referenced by upstream luoyesiqiu/dpt-shell/main.
           fetch_dep https://github.com/zlib-ng/minizip-ng.git shell/src/main/cpp/external/minizip-ng fe5fedc365f7824ada0cf9a84fb79b30d5fc97a8
           fetch_dep https://github.com/bytedance/bhook.git shell/src/main/cpp/external/bhook c0a83d41e0820506068031149f5f0057cde0abfe
           fetch_dep https://github.com/luoyesiqiu/Dobby.git shell/src/main/cpp/external/Dobby f2f8a6a825d2c43aea598012b0dc8685eb6f651a
@@ -114,11 +113,10 @@ jobs:
           echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
           echo "- class definitions: ${CLASS_DEFS}" >> "$GITHUB_STEP_SUMMARY"
 
-          # Fifteen deterministic Parallax classes plus two named anchors are intentionally
-          # retained as separate release class boundaries. R8/AGP can still add a handful
-          # of framework/desugaring helpers, so keep a bounded but realistic ceiling.
-          if [ "$CLASS_DEFS" -lt 17 ] || [ "$CLASS_DEFS" -gt 32 ]; then
-            echo "Expected a compact mapped protection bootstrap with 17-32 class definitions, got ${CLASS_DEFS}" >&2
+          # Fifteen mapped Parallax shell classes + two named anchors + the fixed Parallax16
+          # native VM bridge are intentionally retained. Allow a few R8/desugaring helpers.
+          if [ "$CLASS_DEFS" -lt 18 ] || [ "$CLASS_DEFS" -gt 34 ]; then
+            echo "Expected a compact mapped protection bootstrap with 18-34 class definitions, got ${CLASS_DEFS}" >&2
             exit 1
           fi
 
@@ -142,6 +140,10 @@ jobs:
               exit 1
             }
           done
+          grep -Fq 'Lparallax/vm/Parallax16;' "$STRINGS" || {
+            echo "Fixed high-value VM bridge missing from shell DEX: parallax.vm.Parallax16" >&2
+            exit 1
+          }
 
           for old in \
             ParallaxKiSettingKarwaDo \
@@ -175,8 +177,6 @@ jobs:
             exit 1
           fi
 
-          # The matching key is carried by the CLI manifest. It must never be duplicated
-          # as a plaintext shell-files sidecar that gets uploaded with native artifacts.
           if [ -e executable/shell-files/build-key ]; then
             echo "Plaintext build-key sidecar must not be present in release artifacts" >&2
             exit 1
@@ -203,7 +203,6 @@ jobs:
               echo "Missing GNU_RELRO in $SO" >&2
               exit 1
             }
-
             "$READELF" -dW "$SO" | grep -Eq '\(BIND_NOW\)|FLAGS.*NOW' || {
               echo "Missing immediate binding (-z now) in $SO" >&2
               exit 1
@@ -220,7 +219,7 @@ jobs:
             fi
 
             EXPORTS=$("$NM" -D --defined-only "$SO" | awk '{print $3}' | sed '/^$/d' | sort -u)
-            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|PARALLAX_UNKNOWN_DATA)$' || true)
+            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|PARALLAX_UNKNOWN_DATA|Java_parallax_vm_Parallax16_(hvi|hvv)[0-4])$' || true)
             if [ -n "$UNEXPECTED" ]; then
               echo "Unexpected exported native symbols in $SO:" >&2
               printf '%s\n' "$UNEXPECTED" >&2
@@ -234,6 +233,14 @@ jobs:
               echo "Build-time native key patch symbol is not exported in $SO" >&2
               exit 1
             }
+            for kind in hvi hvv; do
+              for n in $(seq 0 4); do
+                printf '%s\n' "$EXPORTS" | grep -qx "Java_parallax_vm_Parallax16_${kind}${n}" || {
+                  echo "Missing Parallax16 JNI export: ${kind}${n}" >&2
+                  exit 1
+                }
+              done
+            done
 
             if "$READELF" -SW "$SO" | grep -q '[[:space:]]\.symtab[[:space:]]'; then
               echo "Release $SO still contains a static symbol table" >&2
@@ -243,10 +250,8 @@ jobs:
 
           echo "### Native ELF hardening" >> "$GITHUB_STEP_SUMMARY"
           echo "- ABIs: armeabi-v7a + arm64-v8a only" >> "$GITHUB_STEP_SUMMARY"
-          echo "- GNU RELRO: enforced" >> "$GITHUB_STEP_SUMMARY"
-          echo "- immediate binding (BIND_NOW): enforced" >> "$GITHUB_STEP_SUMMARY"
-          echo "- executable stack: rejected" >> "$GITHUB_STEP_SUMMARY"
-          echo "- dynamic exports: restricted to JNI_OnLoad + build-time key patch symbol" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GNU RELRO + BIND_NOW + NX stack: enforced" >> "$GITHUB_STEP_SUMMARY"
+          echo "- dynamic exports: JNI_OnLoad, build-key patch symbol, fixed Parallax16 VM JNI only" >> "$GITHUB_STEP_SUMMARY"
           echo "- static symbol table in release SO: rejected" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release artifacts
