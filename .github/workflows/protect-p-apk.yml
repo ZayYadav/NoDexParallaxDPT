@@ -204,7 +204,8 @@ jobs:
           pushd executable >/dev/null
           java -jar parallax.jar \
             -f "$RUNNER_TEMP/P.apk" \
-            -o "$OUT_DIR"
+            -o "$OUT_DIR" \
+            --high-value-auto
           popd >/dev/null
 
           mapfile -t APKS < <(find "$OUT_DIR" -type f -name '*.apk' -size +0c | sort)
@@ -224,6 +225,20 @@ jobs:
 
           test -s "$PROTECTED_APK"
           unzip -t "$PROTECTED_APK" >/dev/null
+          python3 - "$PROTECTED_APK" <<'PY'
+          import sys
+          import zipfile
+
+          apk = sys.argv[1]
+          with zipfile.ZipFile(apk) as archive:
+              try:
+                  payload = archive.read("assets/Parallax.vm")
+              except KeyError as exc:
+                  raise SystemExit("--high-value-auto produced no assets/Parallax.vm payload") from exc
+              if len(payload) <= 20 or payload[:4] != b"PVM4":
+                  raise SystemExit("automatic high-value payload is missing or is not PVM4")
+              print(f"Verified automatic PVM4 payload: {len(payload)} bytes")
+          PY
           cp "$PROTECTED_APK" "$FINAL_DIR/P-Parallax-Protected.apk"
 
           echo "Protected APK: $(stat -c '%s' "$FINAL_DIR/P-Parallax-Protected.apk") bytes"
@@ -231,6 +246,7 @@ jobs:
           echo "### Protected P.apk" >> "$GITHUB_STEP_SUMMARY"
           echo "- Source: main/P.apk" >> "$GITHUB_STEP_SUMMARY"
           echo "- Output: P-Parallax-Protected.apk" >> "$GITHUB_STEP_SUMMARY"
+          echo "- High-value VM: automatic compatible-method selection (PVM4)" >> "$GITHUB_STEP_SUMMARY"
           echo "- Size: $(stat -c '%s' "$FINAL_DIR/P-Parallax-Protected.apk") bytes" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify protected startup bootstrap wiring
