@@ -7,10 +7,10 @@
 }
 
 # Deterministic release-only stub names. Source names remain type-safe for development,
-# while the release DEX uses Parallax1..Parallax16 plus JangamBhai and Darkdevel.
+# while the release shell DEX uses Parallax1..Parallax15 plus JangamBhai and Darkdevel.
 -applymapping stub-obfuscation.map
 
-# Keep every requested stub class as a distinct class boundary. `allowobfuscation` lets
+# Keep every requested shell class as a distinct class boundary. `allowobfuscation` lets
 # -applymapping assign the final names, while deliberately NOT allowing class-level
 # optimization prevents R8 horizontal/vertical class merging from deleting ABI anchors.
 -keep,allowobfuscation class com.parallax.shell.ParallaxKiSettingKarwaDo
@@ -28,7 +28,6 @@
 -keep,allowobfuscation class com.parallax.shell.ParallaxKiShadiKarwaDo
 -keep,allowobfuscation class com.parallax.shell.ParallaxLovers
 -keep,allowobfuscation class com.parallax.shell.ParallaxVirtualBhaiya
--keep,allowobfuscation class com.parallax.shell.ParallaxVmBridge
 -keep,allowobfuscation class com.parallax.shell.JangamMeraBhaiHai
 -keep,allowobfuscation class com.parallax.shell.ParallaxHuYaarBhai
 
@@ -39,9 +38,9 @@
     public static void g(int, int, int, int);
 }
 
-# High-value method trampolines are also outside R8's graph and directly call Parallax16.
-# Preserve its exact native member ABI while still mapping the class itself.
--keepclassmembers class com.parallax.shell.ParallaxVmBridge {
+# Fixed custom-VM bridge. High-value trampolines are written directly into the target app's
+# DEX and therefore sit outside R8's graph; keep both its package/class and native member ABI.
+-keep class parallax.vm.Parallax16 {
     public static native int hvi0(int);
     public static native int hvi1(int, int);
     public static native int hvi2(int, int, int);
