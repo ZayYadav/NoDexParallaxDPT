@@ -9,6 +9,12 @@
 # Main bootstrap remains shrinkable/optimizable where safe.
 -keep,allowoptimization class com.parallax.shell.ParallaxKiSettingKarwaDo
 
+# Referenced from synthetic verification gates injected into the protected app DEX at
+# pack time. Keep the compact external ABI stable while still allowing method optimization.
+-keep,allowoptimization class com.parallax.shell.ParallaxGate {
+    public static void g(int, int, int, int);
+}
+
 # These framework-facing warning-path classes intentionally keep their odd names and
 # hand-written state-machine/string-decoder bodies. Do not let R8 flatten them back into
 # straight-line code or rename their framework entry points.
