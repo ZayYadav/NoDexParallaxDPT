@@ -17,6 +17,7 @@ import com.wind.meditor.utils.NodeValue;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -32,6 +33,7 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 import java.util.zip.Deflater;
+import java.util.zip.DeflaterOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -42,13 +44,13 @@ public class Apk extends AndroidPackage {
     private static final String DEX_AUTH_LABEL = "Parallax/dex/authentication/v1";
     private static final int DEX_AUTH_TAG_HEX_LENGTH = 64;
 
-    // The hollow DEX contains no protected method bodies. Those bodies live in the
-    // Parallax.love sidecar and are sealed independently so extracting the APK/DEX does
-    // not reveal a reusable instruction store.
-    private static final byte[] CODE_ITEM_MAGIC = new byte[] {'P', 'C', 'I', '2'};
-    private static final String CODE_ITEM_KEY_LABEL = "Parallax/codeitem/encryption/v2/";
-    private static final byte[] CODE_ITEM_AAD =
-            "Parallax/codeitem/payload/v2".getBytes(StandardCharsets.US_ASCII);
+    // PCI3: original method bodies are compressed before encryption. Ciphertext itself is
+    // incompressible, so this ordering gives a meaningful APK-size reduction without
+    // weakening the AES-GCM authenticated vault.
+    private static final byte[] CODE_ITEM_MAGIC = new byte[] {'P', 'C', 'I', '3'};
+    private static final String CODE_ITEM_KEY_LABEL = "Parallax/codeitem/encryption/v3/";
+    private static final String CODE_ITEM_AAD_PREFIX = "Parallax/codeitem/payload/v3/";
+    private static final int CODE_ITEM_LENGTH_SIZE = 4;
     private static final int CODE_ITEM_NONCE_SIZE = 12;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
@@ -238,6 +240,25 @@ public class Apk extends AndroidPackage {
         Files.write(compact.toPath(), zipBytes);
     }
 
+    private static byte[] compressCodeItemPayload(byte[] plaintext) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.max(256, plaintext.length / 2));
+        Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION);
+        try (DeflaterOutputStream stream = new DeflaterOutputStream(output, deflater, 32768)) {
+            stream.write(plaintext);
+            stream.finish();
+        } finally {
+            deflater.end();
+        }
+        return output.toByteArray();
+    }
+
+    private static void writeBigEndianInt(byte[] target, int offset, int value) {
+        target[offset] = (byte) ((value >>> 24) & 0xff);
+        target[offset + 1] = (byte) ((value >>> 16) & 0xff);
+        target[offset + 2] = (byte) ((value >>> 8) & 0xff);
+        target[offset + 3] = (byte) (value & 0xff);
+    }
+
     private static void sealCodeItemPayload(Apk apk, String packageDir, byte[] encKey) throws IOException {
         File codeItemFile = new File(apk.getOutAssetsDir(packageDir), Const.KEY_CODE_ITEM_STORE_NAME);
         if (!codeItemFile.isFile()) {
@@ -250,23 +271,39 @@ public class Apk extends AndroidPackage {
         }
 
         byte[] plaintext = Files.readAllBytes(codeItemFile.toPath());
+        if (plaintext.length < 4) {
+            throw new IOException("Protected code-item payload is empty or malformed");
+        }
+        byte[] compressed = compressCodeItemPayload(plaintext);
         byte[] payloadKey = CryptoUtils.hmacSha256(encKey, CODE_ITEM_KEY_LABEL + buildKey);
         byte[] nonce = new byte[CODE_ITEM_NONCE_SIZE];
         SECURE_RANDOM.nextBytes(nonce);
-        byte[] ciphertext = CryptoUtils.aesGcmEncrypt(payloadKey, nonce, CODE_ITEM_AAD, plaintext);
+        byte[] aad = (CODE_ITEM_AAD_PREFIX + plaintext.length)
+                .getBytes(StandardCharsets.US_ASCII);
+        byte[] ciphertext = CryptoUtils.aesGcmEncrypt(payloadKey, nonce, aad, compressed);
 
-        byte[] envelope = new byte[CODE_ITEM_MAGIC.length + nonce.length + ciphertext.length];
+        byte[] envelope = new byte[CODE_ITEM_MAGIC.length
+                + CODE_ITEM_LENGTH_SIZE
+                + nonce.length
+                + ciphertext.length];
         int cursor = 0;
         System.arraycopy(CODE_ITEM_MAGIC, 0, envelope, cursor, CODE_ITEM_MAGIC.length);
         cursor += CODE_ITEM_MAGIC.length;
+        writeBigEndianInt(envelope, cursor, plaintext.length);
+        cursor += CODE_ITEM_LENGTH_SIZE;
         System.arraycopy(nonce, 0, envelope, cursor, nonce.length);
         cursor += nonce.length;
         System.arraycopy(ciphertext, 0, envelope, cursor, ciphertext.length);
 
         Files.write(codeItemFile.toPath(), envelope);
+        int originalSize = plaintext.length;
+        int compressedSize = compressed.length;
         Arrays.fill(plaintext, (byte) 0);
+        Arrays.fill(compressed, (byte) 0);
         Arrays.fill(payloadKey, (byte) 0);
-        LogUtils.info("Protected method-body vault sealed with AES-256-GCM: %d bytes", envelope.length);
+        Arrays.fill(aad, (byte) 0);
+        LogUtils.info("Protected method-body vault compressed + AES-256-GCM sealed: %d -> %d -> %d bytes",
+                originalSize, compressedSize, envelope.length);
     }
 
     /**
