@@ -4,12 +4,19 @@
 
 #include "parallax_crypto.h"
 #include <cstring>
+#include <mbedtls/platform_util.h>
 
 bool constant_time_equal(const uint8_t *left, const uint8_t *right, size_t length) {
     if (left == nullptr || right == nullptr) return false;
     uint8_t difference = 0;
     for (size_t i = 0; i < length; ++i) difference |= left[i] ^ right[i];
     return difference == 0;
+}
+
+void secure_zero(void *data, size_t length) {
+    if (data != nullptr && length != 0) {
+        mbedtls_platform_zeroize(data, length);
+    }
 }
 
 std::vector<uint8_t> hmac_sha256(const uint8_t *key,
@@ -95,4 +102,56 @@ std::vector<uint8_t> aes_cbc_decrypt(const uint8_t *key,
     mbedtls_aes_free(&ctx);
 
     return out_vec;
+}
+
+std::vector<uint8_t> aes_gcm_decrypt(const uint8_t *key,
+                                     size_t key_bits,
+                                     const uint8_t *nonce,
+                                     size_t nonce_len,
+                                     const uint8_t *aad,
+                                     size_t aad_len,
+                                     const uint8_t *in,
+                                     size_t inlen) {
+    constexpr size_t kTagSize = 16;
+    if (key == nullptr || nonce == nullptr || nonce_len == 0 || in == nullptr || inlen <= kTagSize) {
+        DLOGE("invalid aes gcm input");
+        return {};
+    }
+    if (key_bits != 128 && key_bits != 192 && key_bits != 256) {
+        DLOGE("unsupported aes gcm key bits: %zu", key_bits);
+        return {};
+    }
+    if (aad_len != 0 && aad == nullptr) {
+        DLOGE("invalid aes gcm aad");
+        return {};
+    }
+
+    const size_t ciphertext_len = inlen - kTagSize;
+    const uint8_t *tag = in + ciphertext_len;
+    std::vector<uint8_t> out(ciphertext_len);
+
+    mbedtls_gcm_context ctx;
+    mbedtls_gcm_init(&ctx);
+    int ret = mbedtls_gcm_setkey(&ctx, MBEDTLS_CIPHER_ID_AES,
+                                 key, static_cast<unsigned int>(key_bits));
+    if (ret == 0) {
+        ret = mbedtls_gcm_auth_decrypt(&ctx,
+                                       ciphertext_len,
+                                       nonce,
+                                       nonce_len,
+                                       aad,
+                                       aad_len,
+                                       tag,
+                                       kTagSize,
+                                       in,
+                                       out.data());
+    }
+    mbedtls_gcm_free(&ctx);
+
+    if (ret != 0) {
+        DLOGE("aes-gcm authentication/decryption failed: %d", ret);
+        secure_zero(out.data(), out.size());
+        return {};
+    }
+    return out;
 }
