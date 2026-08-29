@@ -3,6 +3,10 @@
 
 #include <jni.h>
 
+// Registers the tiny Parallax16 JNI trampoline class after the encrypted shell config has
+// resolved the runtime shell package name.
+bool registerHighValueVmMethods(JNIEnv *env);
+
 // Loads the optional AES-GCM sealed assets/Parallax.vm payload. Missing payload is valid
 // when the high-value VM tier was not requested. Authentication/format failures are not.
 void loadHighValueVm(JNIEnv *env);
