@@ -37,25 +37,21 @@ import java.nio.file.Files;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Opt-in high-value method tier.
+ * Opt-in high-value method compiler.
  *
- * Selected methods are compiled from a deliberately small, deterministic subset of Dalvik
- * integer bytecode into a private Parallax VM program. Their original Dalvik implementation
- * is replaced BEFORE the normal DPT extraction pass with a tiny invoke-static trampoline.
- * Therefore the original selected method body never enters the hollow DEX or Parallax.love.
+ * A selected method is compiled into a private integer VM program and its ORIGINAL Dalvik
+ * body is replaced, before normal DPT extraction, with a tiny Parallax16 JNI trampoline.
+ * The original selected body therefore never enters the hollow DEX or Parallax.love.
  *
- * This is intentionally strict. A rule-matched method that uses an unsupported construct
- * fails the protection build instead of silently falling back to normal DEX restoration.
+ * Production v1 deliberately accepts only verifier-safe static int/void methods with at
+ * most four int parameters. Unsupported selected methods fail the whole pack instead of
+ * silently falling back to ordinary DEX restoration.
  */
 public final class HighValueVmTransformer {
     private static final byte[] ENVELOPE_MAGIC = {'P', 'V', 'M', '1'};
@@ -65,7 +61,7 @@ public final class HighValueVmTransformer {
     private static final int NONCE_SIZE = 12;
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    // Keep in sync with shell/src/main/cpp/parallax_vm.h.
+    // Keep in sync with shell/src/main/cpp/parallax_vm.cpp.
     public static final int OP_NOP = 0;
     public static final int OP_CONST = 1;
     public static final int OP_MOVE = 2;
@@ -128,16 +124,13 @@ public final class HighValueVmTransformer {
                 else if (ch == '?') regex.append('.');
                 else regex.append(Pattern.quote(String.valueOf(ch)));
             }
-            regex.append('$');
-            this.pattern = Pattern.compile(regex.toString());
+            this.pattern = Pattern.compile(regex.append('$').toString());
         }
 
         boolean matches(String signature) {
-            if (pattern.matcher(signature).matches()) {
-                matches++;
-                return true;
-            }
-            return false;
+            if (!pattern.matcher(signature).matches()) return false;
+            matches++;
+            return true;
         }
 
         public String getSource() { return source; }
@@ -145,51 +138,29 @@ public final class HighValueVmTransformer {
     }
 
     public static final class VmOp {
-        final int opcode;
-        final int a;
-        final int b;
-        final int c;
-        final int imm;
-        final int target;
-
+        final int opcode, a, b, c, imm, target;
         VmOp(int opcode, int a, int b, int c, int imm, int target) {
-            this.opcode = opcode;
-            this.a = a;
-            this.b = b;
-            this.c = c;
-            this.imm = imm;
-            this.target = target;
+            this.opcode = opcode; this.a = a; this.b = b; this.c = c;
+            this.imm = imm; this.target = target;
         }
     }
 
     public static final class Program {
-        final int id;
-        final String signature;
-        final int registerCount;
-        final int parameterCount;
+        final int id, registerCount, parameterCount;
         final boolean returnsValue;
         final List<VmOp> ops;
-
-        Program(int id, String signature, int registerCount, int parameterCount,
-                boolean returnsValue, List<VmOp> ops) {
-            this.id = id;
-            this.signature = signature;
-            this.registerCount = registerCount;
-            this.parameterCount = parameterCount;
-            this.returnsValue = returnsValue;
-            this.ops = ops;
+        Program(int id, int registerCount, int parameterCount, boolean returnsValue, List<VmOp> ops) {
+            this.id = id; this.registerCount = registerCount; this.parameterCount = parameterCount;
+            this.returnsValue = returnsValue; this.ops = ops;
         }
     }
 
     public static final class Result {
         private final List<Program> programs;
         private final int nextMethodId;
-
         Result(List<Program> programs, int nextMethodId) {
-            this.programs = programs;
-            this.nextMethodId = nextMethodId;
+            this.programs = programs; this.nextMethodId = nextMethodId;
         }
-
         public List<Program> getPrograms() { return programs; }
         public int getNextMethodId() { return nextMethodId; }
     }
@@ -201,8 +172,7 @@ public final class HighValueVmTransformer {
         List<Rule> rules = new ArrayList<>();
         for (String raw : Files.readAllLines(file.toPath(), StandardCharsets.UTF_8)) {
             String line = raw.trim();
-            if (line.isEmpty() || line.startsWith("#")) continue;
-            rules.add(new Rule(line));
+            if (!line.isEmpty() && !line.startsWith("#")) rules.add(new Rule(line));
         }
         if (rules.isEmpty()) throw new IOException("High-value method rules file is empty: " + rulesPath);
         return rules;
@@ -211,22 +181,16 @@ public final class HighValueVmTransformer {
     public static void verifyAllRulesMatched(List<Rule> rules) throws IOException {
         List<String> missing = new ArrayList<>();
         for (Rule rule : rules) if (rule.getMatches() == 0) missing.add(rule.getSource());
-        if (!missing.isEmpty()) {
-            throw new IOException("High-value method rule(s) matched nothing: " + String.join(", ", missing));
-        }
+        if (!missing.isEmpty()) throw new IOException(
+                "High-value method rule(s) matched nothing: " + String.join(", ", missing));
     }
 
     public static Result transform(File inputDex, File outputDex, List<Rule> rules,
-                                   int firstMethodId, String jniClassSig) throws IOException {
-        if (rules == null || rules.isEmpty()) {
-            Files.copy(inputDex.toPath(), outputDex.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            return new Result(new ArrayList<>(), firstMethodId);
-        }
-
+                                   int firstMethodId, String bridgeClassSig) throws IOException {
         DexBackedDexFile dex = DexFileFactory.loadDexFile(inputDex, Opcodes.getDefault());
         List<ClassDef> rewrittenClasses = new ArrayList<>();
         List<Program> programs = new ArrayList<>();
-        int methodId = firstMethodId;
+        int nextId = firstMethodId;
 
         for (ClassDef classDef : dex.getClasses()) {
             List<Method> methods = new ArrayList<>();
@@ -238,12 +202,11 @@ public final class HighValueVmTransformer {
                     methods.add(method);
                     continue;
                 }
-
-                Program program = compile(methodId, signature, method);
-                methods.add(rewriteAsTrampoline(method, methodId, jniClassSig));
+                Program program = compile(nextId, signature, method);
+                methods.add(rewriteAsTrampoline(method, nextId, bridgeClassSig));
                 programs.add(program);
-                LogUtils.info("High-value VM: moved %s -> native VM id=%d", signature, methodId);
-                methodId++;
+                LogUtils.info("High-value VM: moved %s -> native VM id=%d", signature, nextId);
+                nextId++;
             }
             rewrittenClasses.add(new ImmutableClassDef(
                     classDef.getType(), classDef.getAccessFlags(), classDef.getSuperclass(),
@@ -251,19 +214,17 @@ public final class HighValueVmTransformer {
                     classDef.getFields(), methods));
         }
 
-        DexFile out = new ImmutableDexFile(dex.getOpcodes(), rewrittenClasses);
-        DexFileFactory.writeDexFile(outputDex.getAbsolutePath(), out);
-        return new Result(programs, methodId);
+        DexFileFactory.writeDexFile(outputDex.getAbsolutePath(),
+                new ImmutableDexFile(dex.getOpcodes(), rewrittenClasses));
+        return new Result(programs, nextId);
     }
 
     public static void writeEncryptedPayload(File output, List<Program> programs, byte[] encKey)
             throws IOException {
-        if (programs == null || programs.isEmpty()) return;
         String buildKey = Parallax.getBuildKey();
         if (buildKey == null || buildKey.isEmpty()) {
             throw new IOException("Parallax build key is missing; cannot seal high-value VM payload");
         }
-
         byte[] raw = serialize(programs);
         byte[] payloadKey = CryptoUtils.hmacSha256(encKey, KEY_LABEL + buildKey);
         byte[] nonce = new byte[NONCE_SIZE];
@@ -271,8 +232,7 @@ public final class HighValueVmTransformer {
         byte[] aad = (AAD_PREFIX + raw.length).getBytes(StandardCharsets.US_ASCII);
         byte[] ciphertext = CryptoUtils.aesGcmEncrypt(payloadKey, nonce, aad, raw);
 
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream(
-                ENVELOPE_MAGIC.length + 4 + nonce.length + ciphertext.length);
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         try (DataOutputStream out = new DataOutputStream(buffer)) {
             out.write(ENVELOPE_MAGIC);
             out.writeInt(raw.length);
@@ -292,19 +252,15 @@ public final class HighValueVmTransformer {
         try (DataOutputStream out = new DataOutputStream(buffer)) {
             out.write(RAW_MAGIC);
             out.writeInt(programs.size());
-            for (Program program : programs) {
-                out.writeInt(program.id);
-                out.writeShort(program.registerCount);
-                out.writeByte(program.parameterCount);
-                out.writeByte(program.returnsValue ? 1 : 0);
-                out.writeInt(program.ops.size());
-                for (VmOp op : program.ops) {
-                    out.writeByte(op.opcode);
-                    out.writeByte(op.a);
-                    out.writeByte(op.b);
-                    out.writeByte(op.c);
-                    out.writeInt(op.imm);
-                    out.writeInt(op.target);
+            for (Program p : programs) {
+                out.writeInt(p.id);
+                out.writeShort(p.registerCount);
+                out.writeByte(p.parameterCount);
+                out.writeByte(p.returnsValue ? 1 : 0);
+                out.writeInt(p.ops.size());
+                for (VmOp op : p.ops) {
+                    out.writeByte(op.opcode); out.writeByte(op.a); out.writeByte(op.b); out.writeByte(op.c);
+                    out.writeInt(op.imm); out.writeInt(op.target);
                 }
             }
         }
@@ -312,151 +268,104 @@ public final class HighValueVmTransformer {
     }
 
     private static String signatureOf(Method method) {
-        StringBuilder sb = new StringBuilder();
-        sb.append(method.getDefiningClass()).append("->").append(method.getName()).append('(');
-        for (CharSequence type : method.getParameterTypes()) sb.append(type);
-        return sb.append(')').append(method.getReturnType()).toString();
-    }
-
-    private static boolean intLike(CharSequence type) {
-        if (type == null || type.length() != 1) return false;
-        char ch = type.charAt(0);
-        return ch == 'I' || ch == 'Z' || ch == 'B' || ch == 'S' || ch == 'C';
+        StringBuilder out = new StringBuilder(method.getDefiningClass())
+                .append("->").append(method.getName()).append('(');
+        for (CharSequence type : method.getParameterTypes()) out.append(type);
+        return out.append(')').append(method.getReturnType()).toString();
     }
 
     private static Program compile(int methodId, String signature, Method method) throws IOException {
         int flags = method.getAccessFlags();
-        if ((flags & AccessFlags.STATIC.getValue()) == 0) {
-            throw unsupported(signature, "only static methods are supported");
-        }
+        if ((flags & AccessFlags.STATIC.getValue()) == 0) throw unsupported(signature, "method must be static");
         if ((flags & (AccessFlags.NATIVE.getValue() | AccessFlags.ABSTRACT.getValue())) != 0
                 || "<init>".equals(method.getName()) || "<clinit>".equals(method.getName())) {
             throw unsupported(signature, "native/abstract/constructor methods are not eligible");
         }
-
-        List<? extends CharSequence> params = method.getParameterTypes();
-        if (params.size() > 4) throw unsupported(signature, "maximum four primitive arguments");
-        for (CharSequence type : params) {
-            if (!intLike(type)) throw unsupported(signature, "only int/boolean/byte/short/char arguments");
+        if (method.getParameterTypes().size() > 4) throw unsupported(signature, "maximum four int parameters");
+        for (CharSequence type : method.getParameterTypes()) {
+            if (!"I".contentEquals(type)) throw unsupported(signature, "v1 accepts only int parameters");
         }
-        boolean returnsValue = intLike(method.getReturnType());
+        boolean returnsValue = "I".equals(method.getReturnType());
         if (!returnsValue && !"V".equals(method.getReturnType())) {
-            throw unsupported(signature, "return type must be int-like or void");
+            throw unsupported(signature, "v1 return type must be int or void");
         }
 
-        MethodImplementation implementation = method.getImplementation();
-        if (implementation == null) throw unsupported(signature, "method has no implementation");
-        if (!implementation.getTryBlocks().isEmpty()) {
-            throw unsupported(signature, "try/catch is intentionally unsupported in native VM tier");
-        }
-        int registerCount = implementation.getRegisterCount();
-        if (registerCount <= 0 || registerCount > 255 || registerCount < params.size()) {
+        MethodImplementation impl = method.getImplementation();
+        if (impl == null) throw unsupported(signature, "method has no implementation");
+        if (!impl.getTryBlocks().isEmpty()) throw unsupported(signature, "try/catch is not supported");
+        int registerCount = impl.getRegisterCount();
+        if (registerCount <= 0 || registerCount > 255 || registerCount < method.getParameterTypes().size()) {
             throw unsupported(signature, "register layout outside VM limits");
         }
 
-        List<Instruction> instructions = new ArrayList<>();
+        List<Instruction> insns = new ArrayList<>();
         Map<Integer, Integer> addressToIndex = new LinkedHashMap<>();
         int address = 0;
-        for (Instruction instruction : implementation.getInstructions()) {
-            addressToIndex.put(address, instructions.size());
-            instructions.add(instruction);
-            address += instruction.getCodeUnits();
+        for (Instruction i : impl.getInstructions()) {
+            addressToIndex.put(address, insns.size());
+            insns.add(i);
+            address += i.getCodeUnits();
         }
-
-        List<VmOp> ops = new ArrayList<>(instructions.size());
+        List<VmOp> ops = new ArrayList<>(insns.size());
         address = 0;
-        for (Instruction instruction : instructions) {
-            ops.add(translate(signature, instruction, address, addressToIndex));
-            address += instruction.getCodeUnits();
+        for (Instruction i : insns) {
+            ops.add(translate(signature, i, address, addressToIndex));
+            address += i.getCodeUnits();
         }
-        return new Program(methodId, signature, registerCount, params.size(), returnsValue, ops);
+        return new Program(methodId, registerCount, method.getParameterTypes().size(), returnsValue, ops);
     }
 
     private static IOException unsupported(String signature, String why) {
         return new IOException("High-value VM cannot convert " + signature + ": " + why);
     }
 
-    private static int regA(Instruction i) { return ((OneRegisterInstruction) i).getRegisterA(); }
-    private static int regB(Instruction i) { return ((TwoRegisterInstruction) i).getRegisterB(); }
-    private static int regC(Instruction i) { return ((ThreeRegisterInstruction) i).getRegisterC(); }
-    private static int literal(Instruction i) { return ((NarrowLiteralInstruction) i).getNarrowLiteral(); }
-
-    private static int target(String signature, Instruction instruction, int address,
-                              Map<Integer, Integer> addressToIndex) throws IOException {
-        int targetAddress = address + ((OffsetInstruction) instruction).getCodeOffset();
-        Integer value = addressToIndex.get(targetAddress);
-        if (value == null) throw unsupported(signature, "branch target is not an instruction boundary");
-        return value;
+    private static int branchTarget(String signature, Instruction i, int address,
+                                    Map<Integer, Integer> targets) throws IOException {
+        int targetAddress = address + ((OffsetInstruction) i).getCodeOffset();
+        Integer target = targets.get(targetAddress);
+        if (target == null) throw unsupported(signature, "branch target is not an instruction boundary");
+        return target;
     }
 
     private static VmOp translate(String signature, Instruction i, int address,
                                   Map<Integer, Integer> targets) throws IOException {
         Opcode op = i.getOpcode();
         switch (op) {
-            case NOP: return new VmOp(OP_NOP, 0, 0, 0, 0, 0);
-            case CONST_4:
-            case CONST_16:
-            case CONST:
-            case CONST_HIGH16:
-                return new VmOp(OP_CONST, regA(i), 0, 0, literal(i), 0);
-            case MOVE:
-            case MOVE_FROM16:
-            case MOVE_16:
-                return new VmOp(OP_MOVE, regA(i), regB(i), 0, 0, 0);
-            case NEG_INT: return new VmOp(OP_NEG, regA(i), regB(i), 0, 0, 0);
-            case NOT_INT: return new VmOp(OP_NOT, regA(i), regB(i), 0, 0, 0);
-            case INT_TO_BYTE: return new VmOp(OP_BYTE, regA(i), regB(i), 0, 0, 0);
-            case INT_TO_CHAR: return new VmOp(OP_CHAR, regA(i), regB(i), 0, 0, 0);
-            case INT_TO_SHORT: return new VmOp(OP_SHORT, regA(i), regB(i), 0, 0, 0);
-
-            case ADD_INT: return three(OP_ADD, i);
-            case SUB_INT: return three(OP_SUB, i);
-            case MUL_INT: return three(OP_MUL, i);
-            case DIV_INT: return three(OP_DIV, i);
-            case REM_INT: return three(OP_REM, i);
-            case AND_INT: return three(OP_AND, i);
-            case OR_INT: return three(OP_OR, i);
-            case XOR_INT: return three(OP_XOR, i);
-            case SHL_INT: return three(OP_SHL, i);
-            case SHR_INT: return three(OP_SHR, i);
+            case NOP: return v(OP_NOP, 0, 0, 0, 0, 0);
+            case CONST_4: case CONST_16: case CONST: case CONST_HIGH16:
+                return v(OP_CONST, a(i), 0, 0, lit(i), 0);
+            case MOVE: case MOVE_FROM16: case MOVE_16:
+                return v(OP_MOVE, a(i), b(i), 0, 0, 0);
+            case NEG_INT: return v(OP_NEG, a(i), b(i), 0, 0, 0);
+            case NOT_INT: return v(OP_NOT, a(i), b(i), 0, 0, 0);
+            case INT_TO_BYTE: return v(OP_BYTE, a(i), b(i), 0, 0, 0);
+            case INT_TO_CHAR: return v(OP_CHAR, a(i), b(i), 0, 0, 0);
+            case INT_TO_SHORT: return v(OP_SHORT, a(i), b(i), 0, 0, 0);
+            case ADD_INT: return three(OP_ADD, i); case SUB_INT: return three(OP_SUB, i);
+            case MUL_INT: return three(OP_MUL, i); case DIV_INT: return three(OP_DIV, i);
+            case REM_INT: return three(OP_REM, i); case AND_INT: return three(OP_AND, i);
+            case OR_INT: return three(OP_OR, i); case XOR_INT: return three(OP_XOR, i);
+            case SHL_INT: return three(OP_SHL, i); case SHR_INT: return three(OP_SHR, i);
             case USHR_INT: return three(OP_USHR, i);
-
-            case ADD_INT_2ADDR: return twoAddr(OP_ADD, i);
-            case SUB_INT_2ADDR: return twoAddr(OP_SUB, i);
-            case MUL_INT_2ADDR: return twoAddr(OP_MUL, i);
-            case DIV_INT_2ADDR: return twoAddr(OP_DIV, i);
-            case REM_INT_2ADDR: return twoAddr(OP_REM, i);
-            case AND_INT_2ADDR: return twoAddr(OP_AND, i);
-            case OR_INT_2ADDR: return twoAddr(OP_OR, i);
-            case XOR_INT_2ADDR: return twoAddr(OP_XOR, i);
-            case SHL_INT_2ADDR: return twoAddr(OP_SHL, i);
-            case SHR_INT_2ADDR: return twoAddr(OP_SHR, i);
-            case USHR_INT_2ADDR: return twoAddr(OP_USHR, i);
-
-            case ADD_INT_LIT8:
-            case ADD_INT_LIT16: return lit(OP_ADD_LIT, i);
-            case RSUB_INT:
-            case RSUB_INT_LIT8: return lit(OP_RSUB_LIT, i);
-            case MUL_INT_LIT8:
-            case MUL_INT_LIT16: return lit(OP_MUL_LIT, i);
-            case DIV_INT_LIT8:
-            case DIV_INT_LIT16: return lit(OP_DIV_LIT, i);
-            case REM_INT_LIT8:
-            case REM_INT_LIT16: return lit(OP_REM_LIT, i);
-            case AND_INT_LIT8:
-            case AND_INT_LIT16: return lit(OP_AND_LIT, i);
-            case OR_INT_LIT8:
-            case OR_INT_LIT16: return lit(OP_OR_LIT, i);
-            case XOR_INT_LIT8:
-            case XOR_INT_LIT16: return lit(OP_XOR_LIT, i);
-            case SHL_INT_LIT8: return lit(OP_SHL_LIT, i);
-            case SHR_INT_LIT8: return lit(OP_SHR_LIT, i);
-            case USHR_INT_LIT8: return lit(OP_USHR_LIT, i);
-
-            case GOTO:
-            case GOTO_16:
-            case GOTO_32:
-                return new VmOp(OP_GOTO, 0, 0, 0, 0, target(signature, i, address, targets));
+            case ADD_INT_2ADDR: return two(OP_ADD, i); case SUB_INT_2ADDR: return two(OP_SUB, i);
+            case MUL_INT_2ADDR: return two(OP_MUL, i); case DIV_INT_2ADDR: return two(OP_DIV, i);
+            case REM_INT_2ADDR: return two(OP_REM, i); case AND_INT_2ADDR: return two(OP_AND, i);
+            case OR_INT_2ADDR: return two(OP_OR, i); case XOR_INT_2ADDR: return two(OP_XOR, i);
+            case SHL_INT_2ADDR: return two(OP_SHL, i); case SHR_INT_2ADDR: return two(OP_SHR, i);
+            case USHR_INT_2ADDR: return two(OP_USHR, i);
+            case ADD_INT_LIT8: case ADD_INT_LIT16: return literalOp(OP_ADD_LIT, i);
+            case RSUB_INT: case RSUB_INT_LIT8: return literalOp(OP_RSUB_LIT, i);
+            case MUL_INT_LIT8: case MUL_INT_LIT16: return literalOp(OP_MUL_LIT, i);
+            case DIV_INT_LIT8: case DIV_INT_LIT16: return literalOp(OP_DIV_LIT, i);
+            case REM_INT_LIT8: case REM_INT_LIT16: return literalOp(OP_REM_LIT, i);
+            case AND_INT_LIT8: case AND_INT_LIT16: return literalOp(OP_AND_LIT, i);
+            case OR_INT_LIT8: case OR_INT_LIT16: return literalOp(OP_OR_LIT, i);
+            case XOR_INT_LIT8: case XOR_INT_LIT16: return literalOp(OP_XOR_LIT, i);
+            case SHL_INT_LIT8: return literalOp(OP_SHL_LIT, i);
+            case SHR_INT_LIT8: return literalOp(OP_SHR_LIT, i);
+            case USHR_INT_LIT8: return literalOp(OP_USHR_LIT, i);
+            case GOTO: case GOTO_16: case GOTO_32:
+                return v(OP_GOTO, 0, 0, 0, 0, branchTarget(signature, i, address, targets));
             case IF_EQZ: return oneBranch(OP_IF_EQZ, i, signature, address, targets);
             case IF_NEZ: return oneBranch(OP_IF_NEZ, i, signature, address, targets);
             case IF_LTZ: return oneBranch(OP_IF_LTZ, i, signature, address, targets);
@@ -469,77 +378,63 @@ public final class HighValueVmTransformer {
             case IF_GE: return twoBranch(OP_IF_GE, i, signature, address, targets);
             case IF_GT: return twoBranch(OP_IF_GT, i, signature, address, targets);
             case IF_LE: return twoBranch(OP_IF_LE, i, signature, address, targets);
-            case RETURN: return new VmOp(OP_RETURN, regA(i), 0, 0, 0, 0);
-            case RETURN_VOID: return new VmOp(OP_RETURN_VOID, 0, 0, 0, 0, 0);
-            default:
-                throw unsupported(signature, "unsupported opcode " + op.name);
+            case RETURN: return v(OP_RETURN, a(i), 0, 0, 0, 0);
+            case RETURN_VOID: return v(OP_RETURN_VOID, 0, 0, 0, 0, 0);
+            default: throw unsupported(signature, "unsupported opcode " + op);
         }
     }
 
-    private static VmOp three(int opcode, Instruction i) {
+    private static int a(Instruction i) { return ((OneRegisterInstruction) i).getRegisterA(); }
+    private static int b(Instruction i) { return ((TwoRegisterInstruction) i).getRegisterB(); }
+    private static int lit(Instruction i) { return ((NarrowLiteralInstruction) i).getNarrowLiteral(); }
+    private static VmOp v(int op, int a, int b, int c, int imm, int target) { return new VmOp(op,a,b,c,imm,target); }
+    private static VmOp three(int op, Instruction i) {
         ThreeRegisterInstruction x = (ThreeRegisterInstruction) i;
-        return new VmOp(opcode, x.getRegisterA(), x.getRegisterB(), x.getRegisterC(), 0, 0);
+        return v(op, x.getRegisterA(), x.getRegisterB(), x.getRegisterC(), 0, 0);
     }
-
-    private static VmOp twoAddr(int opcode, Instruction i) {
+    private static VmOp two(int op, Instruction i) {
         TwoRegisterInstruction x = (TwoRegisterInstruction) i;
-        return new VmOp(opcode, x.getRegisterA(), x.getRegisterA(), x.getRegisterB(), 0, 0);
+        return v(op, x.getRegisterA(), x.getRegisterA(), x.getRegisterB(), 0, 0);
     }
-
-    private static VmOp lit(int opcode, Instruction i) {
+    private static VmOp literalOp(int op, Instruction i) {
         TwoRegisterInstruction x = (TwoRegisterInstruction) i;
-        return new VmOp(opcode, x.getRegisterA(), x.getRegisterB(), 0, literal(i), 0);
+        return v(op, x.getRegisterA(), x.getRegisterB(), 0, lit(i), 0);
     }
-
-    private static VmOp oneBranch(int opcode, Instruction i, String signature, int address,
-                                  Map<Integer, Integer> targets) throws IOException {
-        return new VmOp(opcode, regA(i), 0, 0, 0, target(signature, i, address, targets));
+    private static VmOp oneBranch(int op, Instruction i, String sig, int address,
+                                  Map<Integer,Integer> targets) throws IOException {
+        return v(op, a(i), 0, 0, 0, branchTarget(sig, i, address, targets));
     }
-
-    private static VmOp twoBranch(int opcode, Instruction i, String signature, int address,
-                                  Map<Integer, Integer> targets) throws IOException {
+    private static VmOp twoBranch(int op, Instruction i, String sig, int address,
+                                  Map<Integer,Integer> targets) throws IOException {
         TwoRegisterInstruction x = (TwoRegisterInstruction) i;
-        return new VmOp(opcode, x.getRegisterA(), x.getRegisterB(), 0, 0,
-                target(signature, i, address, targets));
+        return v(op, x.getRegisterA(), x.getRegisterB(), 0, 0,
+                branchTarget(sig, i, address, targets));
     }
 
-    private static Method rewriteAsTrampoline(Method method, int methodId, String jniClassSig)
-            throws IOException {
-        List<String> parameterTypes = new ArrayList<>();
-        for (CharSequence type : method.getParameterTypes()) parameterTypes.add(type.toString());
-        int paramCount = parameterTypes.size();
-        boolean returnsValue = intLike(method.getReturnType());
-        String bridgeName = (returnsValue ? "hvi" : "hvv") + paramCount;
-
+    private static Method rewriteAsTrampoline(Method method, int methodId, String bridgeClassSig) {
+        int params = method.getParameterTypes().size();
+        boolean returnsValue = "I".equals(method.getReturnType());
         List<String> bridgeParams = new ArrayList<>();
-        bridgeParams.add("I"); // method id
-        bridgeParams.addAll(parameterTypes);
-        ImmutableMethodReference bridgeRef = new ImmutableMethodReference(
-                jniClassSig, bridgeName, bridgeParams, returnsValue ? "I" : "V");
+        bridgeParams.add("I");
+        for (int i = 0; i < params; i++) bridgeParams.add("I");
+        ImmutableMethodReference bridge = new ImmutableMethodReference(
+                bridgeClassSig, (returnsValue ? "hvi" : "hvv") + params,
+                bridgeParams, returnsValue ? "I" : "V");
 
-        int registerCount = paramCount + 1;
         List<Instruction> code = new ArrayList<>();
         code.add(new ImmutableInstruction31i(Opcode.CONST, 0, methodId));
-        int c = 0, d = 0, e = 0, f = 0, g = 0;
-        int[] regs = {0, 1, 2, 3, 4};
-        if (paramCount + 1 > 0) c = regs[0];
-        if (paramCount + 1 > 1) d = regs[1];
-        if (paramCount + 1 > 2) e = regs[2];
-        if (paramCount + 1 > 3) f = regs[3];
-        if (paramCount + 1 > 4) g = regs[4];
-        code.add(new ImmutableInstruction35c(Opcode.INVOKE_STATIC, paramCount + 1,
-                c, d, e, f, g, bridgeRef));
+        code.add(new ImmutableInstruction35c(Opcode.INVOKE_STATIC, params + 1,
+                0, params >= 1 ? 1 : 0, params >= 2 ? 2 : 0,
+                params >= 3 ? 3 : 0, params >= 4 ? 4 : 0, bridge));
         if (returnsValue) {
             code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT, 0));
             code.add(new ImmutableInstruction11x(Opcode.RETURN, 0));
         } else {
             code.add(new ImmutableInstruction10x(Opcode.RETURN_VOID));
         }
-
-        ImmutableMethodImplementation implementation = new ImmutableMethodImplementation(
-                registerCount, code, null, null);
         return new ImmutableMethod(method.getDefiningClass(), method.getName(), method.getParameters(),
                 method.getReturnType(), method.getAccessFlags(), method.getAnnotations(),
-                method.getHiddenApiRestrictions(), implementation);
+                method.getHiddenApiRestrictions(),
+                new ImmutableMethodImplementation(params + 1, code, null, null));
     }
 }
