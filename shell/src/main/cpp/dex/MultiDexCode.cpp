@@ -6,6 +6,7 @@
 
 #include <string>
 #include <utility>
+#include <sys/mman.h>
 
 #include "common/obfuscate.h"
 #include "parallax_crypto.h"
@@ -25,6 +26,40 @@ bool isSealedCodeItem(const uint8_t *buffer, size_t size) {
            && size > CODE_ITEM_MAGIC_SIZE + CODE_ITEM_NONCE_SIZE + CODE_ITEM_GCM_TAG_SIZE
            && memcmp(buffer, CODE_ITEM_MAGIC, CODE_ITEM_MAGIC_SIZE) == 0;
 }
+
+void releaseOwnedVault(uint8_t *&buffer, size_t &size) {
+    if (buffer == nullptr || size == 0) {
+        buffer = nullptr;
+        size = 0;
+        return;
+    }
+    secure_zero(buffer, size);
+    (void) munmap(buffer, size);
+    buffer = nullptr;
+    size = 0;
+}
+
+uint8_t *allocateProtectedVault(const uint8_t *plaintext, size_t size) {
+    if (plaintext == nullptr || size == 0) {
+        return nullptr;
+    }
+    void *mapping = mmap(nullptr,
+                         size,
+                         PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS,
+                         -1,
+                         0);
+    if (mapping == MAP_FAILED) {
+        return nullptr;
+    }
+    memcpy(mapping, plaintext, size);
+#ifdef MADV_DONTDUMP
+    // Best-effort defense in depth. PR_SET_DUMPABLE=0/core-dump blocking is also active,
+    // but keeping this dedicated vault out of dumpable VMAs removes another easy path.
+    (void) madvise(mapping, size, MADV_DONTDUMP);
+#endif
+    return static_cast<uint8_t *>(mapping);
+}
 } // namespace
 
 parallax::data::MultiDexCode* parallax::data::MultiDexCode::getInst(){
@@ -40,7 +75,7 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
     if (m_source_buffer == buffer
         && m_source_size == size
         && m_buffer != nullptr
-        && (!m_owned_buffer.empty()
+        && (m_owned_buffer != nullptr
 #ifndef DEBUG
             || m_buffer == INVALID_CODE_ITEM_BUFFER
 #endif
@@ -51,11 +86,7 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
     }
 
     m_skip_parse = false;
-    if (!m_owned_buffer.empty()) {
-        secure_zero(m_owned_buffer.data(), m_owned_buffer.size());
-        m_owned_buffer.clear();
-        m_owned_buffer.shrink_to_fit();
-    }
+    releaseOwnedVault(m_owned_buffer, m_owned_buffer_size);
     m_source_buffer = buffer;
     m_source_size = size;
 
@@ -116,10 +147,24 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
         return;
     }
 
-    m_owned_buffer = std::move(plaintext);
-    m_buffer = m_owned_buffer.data();
-    m_size = m_owned_buffer.size();
-    DLOGD("authenticated code-item vault opened in native memory: %zu bytes", m_size);
+    m_owned_buffer = allocateProtectedVault(plaintext.data(), plaintext.size());
+    m_owned_buffer_size = plaintext.size();
+    secure_zero(plaintext.data(), plaintext.size());
+    plaintext.clear();
+    plaintext.shrink_to_fit();
+
+    if (m_owned_buffer == nullptr) {
+        m_owned_buffer_size = 0;
+        DLOGE("cannot allocate protected native method vault");
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        m_buffer = const_cast<uint8_t *>(INVALID_CODE_ITEM_BUFFER);
+        m_size = sizeof(INVALID_CODE_ITEM_BUFFER);
+        return;
+    }
+
+    m_buffer = m_owned_buffer;
+    m_size = m_owned_buffer_size;
+    DLOGD("authenticated code-item vault opened in dedicated native pages: %zu bytes", m_size);
 }
 
 uint16_t parallax::data::MultiDexCode::readVersion(){
