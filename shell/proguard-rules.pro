@@ -6,17 +6,16 @@
     public static int v(...);
 }
 
-# Deterministic release-only stub names. Source names remain type-safe for development,
-# while the release DEX uses Parallax1..Parallax15 plus JangamBhai and Darkdevel.
+# Deterministic release-only stub names. Most source classes remain descriptive and are
+# mapped into the Parallax series. Parallax2 is intentionally a source-level class because
+# Android instantiates it from the protected manifest before ordinary app code is running.
 -applymapping stub-obfuscation.map
 
 # Keep every requested stub class as a distinct class boundary. `allowobfuscation` lets
 # -applymapping assign the final names, while deliberately NOT allowing class-level
-# optimization prevents R8 horizontal/vertical class merging from deleting Parallax2,
-# Parallax3 or any of the named anchors. Ordinary member code can still be optimized and
-# renamed unless an ABI rule below pins it.
+# optimization prevents R8 horizontal/vertical class merging from deleting external ABIs.
 -keep,allowobfuscation class com.parallax.shell.ParallaxKiSettingKarwaDo
--keep,allowobfuscation class com.parallax.shell.ParallaxKoLadkiChahiye
+-keep class com.parallax.shell.Parallax2
 -keep,allowobfuscation class com.parallax.shell.ParallaxGate
 -keep,allowobfuscation class com.parallax.shell.Global
 -keep,allowobfuscation class com.parallax.shell.Parallax
@@ -34,8 +33,7 @@
 -keep,allowobfuscation class com.parallax.shell.ParallaxHuYaarBhai
 
 # The packer injects calls to Parallax3.g(...) into the ORIGINAL app DEX. That caller is
-# outside R8's program graph, so both the mapped class boundary and the member name/signature
-# are external ABI and must stay exact.
+# outside R8's program graph, so both the mapped class boundary and member signature are ABI.
 -keepclassmembers class com.parallax.shell.ParallaxGate {
     public static void g(int, int, int, int);
 }
@@ -49,12 +47,15 @@
     protected *** *(...);
 }
 
-# Preserve framework entry methods for the mapped component factory. The class itself is
-# kept distinct above so Android can instantiate Parallax2 from the protected manifest.
--keepclassmembers class com.parallax.shell.ParallaxKoLadkiChahiye {
+# Android calls these methods by framework dispatch on the manifest-instantiated Parallax2.
+-keepclassmembers class com.parallax.shell.Parallax2 {
     public <init>();
     public *** instantiate*(...);
 }
+
+# The legacy source-name alias exists only so older internal source references can compile.
+# It is not an external ABI and should not survive with its descriptive descriptor.
+-keep,allowshrinking,allowoptimization,allowobfuscation class com.parallax.shell.ParallaxKoLadkiChahiye
 
 # Existing hand-written state machines remain opaque at source level. Non-ABI members in
 # other classes are still eligible for R8 name shrinking/optimization.
