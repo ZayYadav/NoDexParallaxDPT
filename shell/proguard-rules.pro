@@ -8,12 +8,11 @@
 
 -applymapping stub-obfuscation.map
 
-# Release shell ABI anchors. Keep their implementations intact while still allowing
-# the deterministic stub-obfuscation.map names (Parallax1, Parallax3..15,
-# JangamBhai and Darkdevel) to be applied. Class-only keep rules allowed R8 full
-# mode to optimize a package-private anchor out of the final DEX on some builds.
+# Release shell ABI anchors. Keep implementations intact while allowing the exact
+# deterministic names in stub-obfuscation.map to move every retained shell/VM class
+# into the single Parallax.Enc runtime namespace.
 -keep,allowobfuscation class com.parallax.shell.ParallaxKiSettingKarwaDo { *; }
--keep class com.parallax.shell.Parallax2 { *; }
+-keep,allowobfuscation class com.parallax.shell.Parallax2 { *; }
 -keep,allowobfuscation class com.parallax.shell.ParallaxGate { *; }
 -keep,allowobfuscation class com.parallax.shell.Global { *; }
 -keep,allowobfuscation class com.parallax.shell.Parallax { *; }
@@ -34,7 +33,9 @@
     public static void g(int, int, int, int);
 }
 
--keep class parallax.vm.Parallax16 {
+# The Java source name is deliberately descriptive only at build time. R8 maps this
+# exact native bridge to Parallax.Enc.CrackWarTeamMC; native member names stay fixed.
+-keep,allowobfuscation class parallax.vm.Parallax16 {
     public static native int hvi0(int);
     public static native int hvi1(int, int);
     public static native int hvi2(int, int, int);
@@ -59,9 +60,8 @@
     public *** instantiate*(...);
 }
 
-# Legacy source-level factory alias is intentionally disposable. Parallax2 is
-# the literal framework ABI now, so retaining this alias would collide with the
-# historical applymapping target.
+# Legacy source-level factory alias is intentionally disposable. Parallax2 is the
+# literal framework ABI now, so retaining this alias would add a duplicate entry.
 -keep,allowshrinking,allowoptimization,allowobfuscation class com.parallax.shell.ParallaxKoLadkiChahiye
 
 -keepclassmembers,allowobfuscation class com.parallax.shell.ParallaxKiSettingKarwaDo {
@@ -71,4 +71,6 @@
     private static volatile int flowNoise;
 }
 
--repackageclasses com.parallax.shell
+# Any surviving helper/desugaring classes that are not explicitly mapped above are
+# still forced into the same release namespace.
+-repackageclasses Parallax.Enc
