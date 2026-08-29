@@ -1,0 +1,24 @@
+# Parallax high-value native VM rules (APK-only v1)
+#
+# Pass this file with:
+#   java -jar parallax.jar -f app.apk --high-value-methods parallax-high-value-methods.rules
+#
+# Canonical signature syntax:
+#   Lpackage/name/Class;->method(ARGS)RETURN
+#
+# v1 intentionally supports only:
+#   - static methods
+#   - 0..4 int (I) parameters
+#   - int (I) or void (V) return
+#   - deterministic integer arithmetic / bitwise / branch bytecode
+#   - no objects, arrays, field access, invokes, monitor, switch payloads, or try/catch
+#
+# A selected method that is unsupported, or a rule that matches nothing, FAILS the pack.
+# There is no silent fallback to the normal DEX method vault.
+#
+# Examples (replace with real methods from your own APK):
+# Lcom/example/security/LicenseMath;->mix(III)I
+# Lcom/example/security/TokenMath;->scramble(IIII)I
+# Lcom/example/security/StateMath;->advance(II)V
+#
+# '*' and '?' wildcards are supported, but exact signatures are recommended for high-value code.
