@@ -7,14 +7,12 @@
 }
 
 # Deterministic release-only stub names. Source names remain type-safe for development,
-# while the release DEX uses Parallax1..Parallax15 plus JangamBhai and Darkdevel.
+# while the release DEX uses Parallax1..Parallax16 plus JangamBhai and Darkdevel.
 -applymapping stub-obfuscation.map
 
 # Keep every requested stub class as a distinct class boundary. `allowobfuscation` lets
 # -applymapping assign the final names, while deliberately NOT allowing class-level
-# optimization prevents R8 horizontal/vertical class merging from deleting Parallax2,
-# Parallax3 or any of the named anchors. Ordinary member code can still be optimized and
-# renamed unless an ABI rule below pins it.
+# optimization prevents R8 horizontal/vertical class merging from deleting ABI anchors.
 -keep,allowobfuscation class com.parallax.shell.ParallaxKiSettingKarwaDo
 -keep,allowobfuscation class com.parallax.shell.ParallaxKoLadkiChahiye
 -keep,allowobfuscation class com.parallax.shell.ParallaxGate
@@ -30,6 +28,7 @@
 -keep,allowobfuscation class com.parallax.shell.ParallaxKiShadiKarwaDo
 -keep,allowobfuscation class com.parallax.shell.ParallaxLovers
 -keep,allowobfuscation class com.parallax.shell.ParallaxVirtualBhaiya
+-keep,allowobfuscation class com.parallax.shell.ParallaxVmBridge
 -keep,allowobfuscation class com.parallax.shell.JangamMeraBhaiHai
 -keep,allowobfuscation class com.parallax.shell.ParallaxHuYaarBhai
 
@@ -38,6 +37,21 @@
 # are external ABI and must stay exact.
 -keepclassmembers class com.parallax.shell.ParallaxGate {
     public static void g(int, int, int, int);
+}
+
+# High-value method trampolines are also outside R8's graph and directly call Parallax16.
+# Preserve its exact native member ABI while still mapping the class itself.
+-keepclassmembers class com.parallax.shell.ParallaxVmBridge {
+    public static native int hvi0(int);
+    public static native int hvi1(int, int);
+    public static native int hvi2(int, int, int);
+    public static native int hvi3(int, int, int, int);
+    public static native int hvi4(int, int, int, int, int);
+    public static native void hvv0(int);
+    public static native void hvv1(int, int);
+    public static native void hvv2(int, int, int);
+    public static native void hvv3(int, int, int, int);
+    public static native void hvv4(int, int, int, int, int);
 }
 
 # Dynamic RegisterNatives uses these Java method names/signatures, so the member ABI must
