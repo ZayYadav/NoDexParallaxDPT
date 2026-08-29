@@ -16,6 +16,9 @@ namespace parallax::data {
         private:
             size_t m_size{0};
             uint8_t *m_buffer{nullptr};
+            const uint8_t *m_source_buffer{nullptr};
+            size_t m_source_size{0};
+            bool m_skip_parse{false};
             std::vector<uint8_t> m_owned_buffer;
         public:
             static MultiDexCode *getInst();
