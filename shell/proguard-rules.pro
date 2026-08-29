@@ -26,7 +26,6 @@
 # remain stable even though the Application class is renamed to Parallax1.
 -keepclassmembers,allowoptimization class com.parallax.shell.ParallaxKiSettingKarwaDo {
     public <init>();
-    public native <methods>;
     public native *** *(...);
     public *** *(...);
     protected *** *(...);
