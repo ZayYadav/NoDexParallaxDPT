@@ -32,10 +32,9 @@ void hardenRuntimeKeyMemory() {
 #ifdef MADV_DONTDUMP
     // The per-process unwrap key never needs to appear in a core/process dump. This marks
     // the backing page non-dumpable in addition to the process-wide PR_SET_DUMPABLE guard.
+    // Do not use MADV_DONTFORK here: this static key may share a data page with unrelated
+    // globals, and excluding that whole page from a legitimate child would be unsafe.
     (void) madvise(page, pageSize, MADV_DONTDUMP);
-#endif
-#ifdef MADV_DONTFORK
-    (void) madvise(page, pageSize, MADV_DONTFORK);
 #endif
     // Best effort: keep the runtime key page resident instead of allowing it to be paged.
     (void) mlock(page, pageSize);
