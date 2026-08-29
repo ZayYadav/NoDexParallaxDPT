@@ -1,6 +1,7 @@
 package com.parallax.parallax.builder;
 
 import com.android.apksigner.ApkSignerTool;
+import com.parallax.parallax.Parallax;
 import com.parallax.parallax.config.Const;
 import com.parallax.parallax.config.ShellConfig;
 import com.parallax.parallax.res.ApkManifestEditor;
@@ -16,6 +17,7 @@ import com.wind.meditor.utils.NodeValue;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -23,6 +25,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
@@ -30,6 +33,7 @@ import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
 import java.util.zip.Deflater;
+import java.util.zip.DeflaterOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -39,6 +43,16 @@ public class Apk extends AndroidPackage {
     private static final String DEX_AUTH_COMMENT_PREFIX = "PXH1:";
     private static final String DEX_AUTH_LABEL = "Parallax/dex/authentication/v1";
     private static final int DEX_AUTH_TAG_HEX_LENGTH = 64;
+
+    // PCI3: original method bodies are compressed before encryption. Ciphertext itself is
+    // incompressible, so this ordering gives a meaningful APK-size reduction without
+    // weakening the AES-GCM authenticated vault.
+    private static final byte[] CODE_ITEM_MAGIC = new byte[] {'P', 'C', 'I', '3'};
+    private static final String CODE_ITEM_KEY_LABEL = "Parallax/codeitem/encryption/v3/";
+    private static final String CODE_ITEM_AAD_PREFIX = "Parallax/codeitem/payload/v3/";
+    private static final int CODE_ITEM_LENGTH_SIZE = 4;
+    private static final int CODE_ITEM_NONCE_SIZE = 12;
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     public static class Builder extends AndroidPackage.Builder {
         @Override
@@ -226,6 +240,72 @@ public class Apk extends AndroidPackage {
         Files.write(compact.toPath(), zipBytes);
     }
 
+    private static byte[] compressCodeItemPayload(byte[] plaintext) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.max(256, plaintext.length / 2));
+        Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION);
+        try (DeflaterOutputStream stream = new DeflaterOutputStream(output, deflater, 32768)) {
+            stream.write(plaintext);
+            stream.finish();
+        } finally {
+            deflater.end();
+        }
+        return output.toByteArray();
+    }
+
+    private static void writeBigEndianInt(byte[] target, int offset, int value) {
+        target[offset] = (byte) ((value >>> 24) & 0xff);
+        target[offset + 1] = (byte) ((value >>> 16) & 0xff);
+        target[offset + 2] = (byte) ((value >>> 8) & 0xff);
+        target[offset + 3] = (byte) (value & 0xff);
+    }
+
+    private static void sealCodeItemPayload(Apk apk, String packageDir, byte[] encKey) throws IOException {
+        File codeItemFile = new File(apk.getOutAssetsDir(packageDir), Const.KEY_CODE_ITEM_STORE_NAME);
+        if (!codeItemFile.isFile()) {
+            throw new IOException("Protected code-item payload is missing: " + codeItemFile);
+        }
+
+        String buildKey = Parallax.getBuildKey();
+        if (buildKey == null || buildKey.isEmpty()) {
+            throw new IOException("Parallax build key is missing; cannot seal code-item payload");
+        }
+
+        byte[] plaintext = Files.readAllBytes(codeItemFile.toPath());
+        if (plaintext.length < 4) {
+            throw new IOException("Protected code-item payload is empty or malformed");
+        }
+        byte[] compressed = compressCodeItemPayload(plaintext);
+        byte[] payloadKey = CryptoUtils.hmacSha256(encKey, CODE_ITEM_KEY_LABEL + buildKey);
+        byte[] nonce = new byte[CODE_ITEM_NONCE_SIZE];
+        SECURE_RANDOM.nextBytes(nonce);
+        byte[] aad = (CODE_ITEM_AAD_PREFIX + plaintext.length)
+                .getBytes(StandardCharsets.US_ASCII);
+        byte[] ciphertext = CryptoUtils.aesGcmEncrypt(payloadKey, nonce, aad, compressed);
+
+        byte[] envelope = new byte[CODE_ITEM_MAGIC.length
+                + CODE_ITEM_LENGTH_SIZE
+                + nonce.length
+                + ciphertext.length];
+        int cursor = 0;
+        System.arraycopy(CODE_ITEM_MAGIC, 0, envelope, cursor, CODE_ITEM_MAGIC.length);
+        cursor += CODE_ITEM_MAGIC.length;
+        writeBigEndianInt(envelope, cursor, plaintext.length);
+        cursor += CODE_ITEM_LENGTH_SIZE;
+        System.arraycopy(nonce, 0, envelope, cursor, nonce.length);
+        cursor += nonce.length;
+        System.arraycopy(ciphertext, 0, envelope, cursor, ciphertext.length);
+
+        Files.write(codeItemFile.toPath(), envelope);
+        int originalSize = plaintext.length;
+        int compressedSize = compressed.length;
+        Arrays.fill(plaintext, (byte) 0);
+        Arrays.fill(compressed, (byte) 0);
+        Arrays.fill(payloadKey, (byte) 0);
+        Arrays.fill(aad, (byte) 0);
+        LogUtils.info("Protected method-body vault compressed + AES-256-GCM sealed: %d -> %d -> %d bytes",
+                originalSize, compressedSize, envelope.length);
+    }
+
     /**
      * Re-encode the hollowed protected DEX archive with BEST_COMPRESSION and a keyed
      * HMAC-SHA256 ZIP comment before it is appended behind the one-class bootstrap DEX.
@@ -384,6 +464,7 @@ public class Apk extends AndroidPackage {
 
             String assetsPath = apk.getOutAssetsDir(apkMainProcessPath).getAbsolutePath();
             apk.extractDexCode(apkMainProcessPath, assetsPath);
+            sealCodeItemPayload(apk, apkMainProcessPath, encKey);
             apk.addJunkCodeDex(apkMainProcessPath);
             apk.compressDexFiles(apkMainProcessPath);
             compactDexPayload(apk, apkMainProcessPath, encKey);

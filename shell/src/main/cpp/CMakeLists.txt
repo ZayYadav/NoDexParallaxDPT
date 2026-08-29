@@ -112,6 +112,11 @@ set_source_files_properties(parallax_risk.cpp PROPERTIES COMPILE_OPTIONS "-Wno-u
 
 find_library(log-lib log)
 find_library(android-lib android)
+find_library(z-lib z)
+
+if(NOT z-lib)
+    message(FATAL_ERROR "Android zlib is required for compressed PCI3 method vaults")
+endif()
 
 target_compile_options(${SO_NAME} PRIVATE
         -Wall
@@ -132,6 +137,7 @@ target_link_libraries(${SO_NAME}
         dobby
         bytehook
         ${android-lib}
+        ${z-lib}
         ${PARALLAX_MBEDCRYPTO_TARGET}
 )
 

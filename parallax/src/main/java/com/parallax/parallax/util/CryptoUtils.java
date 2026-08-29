@@ -7,6 +7,7 @@ import java.security.NoSuchAlgorithmException;
 
 import javax.crypto.Cipher;
 import javax.crypto.Mac;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -14,6 +15,7 @@ public class CryptoUtils {
     private static final byte[] CONFIG_MAGIC = new byte[] {'P', 'A', 'R', '1'};
     public static final String RC4Transform = "RC4";
     private static final String HMAC_SHA256 = "HmacSHA256";
+    private static final int GCM_TAG_BITS = 128;
 
     public static byte[] rc4Crypt(byte[] key, byte[] in) {
         try {
@@ -62,6 +64,35 @@ public class CryptoUtils {
         catch (Exception e){
         }
         return null;
+    }
+
+    /**
+     * AES-GCM authenticated encryption for sealed protection payloads.
+     * The returned bytes are ciphertext || 16-byte authentication tag; callers persist
+     * the nonce separately in their versioned envelope.
+     */
+    public static byte[] aesGcmEncrypt(byte[] key, byte[] nonce, byte[] aad, byte[] plaintext) {
+        if (key == null || key.length != 32) {
+            throw new IllegalArgumentException("AES-GCM requires a 256-bit key");
+        }
+        if (nonce == null || nonce.length != 12) {
+            throw new IllegalArgumentException("AES-GCM requires a 96-bit nonce");
+        }
+        if (plaintext == null) {
+            throw new IllegalArgumentException("plaintext is null");
+        }
+        try {
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE,
+                    new SecretKeySpec(key, "AES"),
+                    new GCMParameterSpec(GCM_TAG_BITS, nonce));
+            if (aad != null && aad.length != 0) {
+                cipher.updateAAD(aad);
+            }
+            return cipher.doFinal(plaintext);
+        } catch (Exception e) {
+            throw new IllegalStateException("AES-GCM encryption failed", e);
+        }
     }
 
     /**

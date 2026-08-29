@@ -23,7 +23,12 @@ import java.util.Set;
  */
 public class JunkCodeGenerator {
     private static final String BASE_CLASS_NAME = "com/parallax/parallax/junkcode/JunkClass";
-    private static final int MAX_GENERATE_COUNT = 100;
+
+    // Keep the runtime sentinel and a randomized decoy surface, but do not bloat every
+    // protected APK with 50-99 throwaway classes. The old amount added size without
+    // materially improving the authenticated/hollow-DEX defenses.
+    private static final int MIN_GENERATE_COUNT = 12;
+    private static final int MAX_GENERATE_COUNT = 24;
     private static final Set<String> classNameSet = new HashSet<>();
 
     private static void insertSystemExit(Code code, boolean returnVoid) {
@@ -53,17 +58,19 @@ public class JunkCodeGenerator {
         return String.format(Locale.US, "L%s;", BASE_CLASS_NAME);
     }
 
-    private static String generateClassName() {
-        SecureRandom secureRandom = new SecureRandom();
-        // nextInt() can be negative; keep suffix non-negative for stable class names.
-        int number = Math.floorMod(secureRandom.nextInt(), MAX_GENERATE_COUNT * 10);
-
+    private static String generateClassName(SecureRandom secureRandom) {
+        int number = Math.floorMod(secureRandom.nextInt(), MAX_GENERATE_COUNT * 32);
         return String.format(Locale.US, "L%s%d;", BASE_CLASS_NAME, number);
     }
 
     public static void generateJunkCodeDex(File file) throws IOException {
         SecureRandom secureRandom = new SecureRandom();
-        final int generateClassCount = secureRandom.nextInt(MAX_GENERATE_COUNT / 2) + (MAX_GENERATE_COUNT / 2);
+        final int generateClassCount = MIN_GENERATE_COUNT
+                + secureRandom.nextInt(MAX_GENERATE_COUNT - MIN_GENERATE_COUNT + 1);
+
+        // The CLI can protect several packages in one JVM. Do not retain old generated
+        // names across runs because that only increases collision retries and memory use.
+        classNameSet.clear();
 
         DexMaker dexMaker = new DexMaker();
 
@@ -75,7 +82,7 @@ public class JunkCodeGenerator {
             }
             else {
                 do {
-                    className = generateClassName();
+                    className = generateClassName(secureRandom);
                 }
                 while(classNameSet.contains(className));
                 classNameSet.add(className);
@@ -84,18 +91,18 @@ public class JunkCodeGenerator {
             TypeId<?> typeId = TypeId.get(className);
             dexMaker.declare(typeId, "", Modifier.PUBLIC, TypeId.OBJECT);
 
-            // generate static code black
+            // Keep the base junk behavior used by the native sentinel checks.
             MethodId<?, Void> clinitMethod = typeId.getMethod(TypeId.VOID, "<clinit>");
             Code clinitCode = dexMaker.declare(clinitMethod, Modifier.STATIC);
             insertSystemExit(clinitCode, false);
 
-            // generate constructor
             MethodId<?, Void> initMethod = typeId.getConstructor();
             Code initCode = dexMaker.declare(initMethod, Modifier.PUBLIC);
             insertSystemExit(initCode, true);
 
-            // generate normal method
-            int methodCount = secureRandom.nextInt(2) + 2;
+            // One or two decoy methods are enough once the real DEX/vault integrity layers
+            // are authenticated; larger junk counts mostly increase APK size.
+            int methodCount = secureRandom.nextInt(2) + 1;
             for (int j = 0; j < methodCount; j++) {
                 String methodName = StringUtils.generateIdentifier(3);
 
@@ -113,7 +120,8 @@ public class JunkCodeGenerator {
 
         byte[] generate = dexMaker.generate();
         Files.write(Paths.get(file.getAbsolutePath()), generate);
-        LogUtils.info("generated junk class count: %d", generateClassCount);
+        LogUtils.info("generated compact junk class count: %d, dex bytes: %d",
+                generateClassCount, generate.length);
 
     }
 }

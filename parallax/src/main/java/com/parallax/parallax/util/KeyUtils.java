@@ -4,6 +4,8 @@ import java.security.SecureRandom;
 
 public class KeyUtils {
 
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
     public static byte[] generateIV(byte[] key) {
         byte[] newKey = new byte[key.length];
         System.arraycopy(key, 0, newKey, 0, newKey.length);
@@ -13,14 +15,11 @@ public class KeyUtils {
     }
 
     public static byte[] generateKey() {
-        byte[] rc4key = new byte[16];
-        SecureRandom secureRandom = new SecureRandom();
-        for(int i = 0;i < rc4key.length;i++) {
-            secureRandom.nextBytes(rc4key);
-        }
-
-        rc4key[3] = 0x20;
-        rc4key[9] = 0x74;
-        return rc4key;
+        // This 16-byte value is patched into the native shell and is the root secret for
+        // build-bound payload derivations. Keep every bit random. Older code overwrote two
+        // bytes after generation, unnecessarily reducing entropy without adding security.
+        byte[] key = new byte[16];
+        SECURE_RANDOM.nextBytes(key);
+        return key;
     }
 }
