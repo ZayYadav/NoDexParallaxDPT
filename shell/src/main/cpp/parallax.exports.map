@@ -2,6 +2,16 @@
   global:
     JNI_OnLoad;
     PARALLAX_UNKNOWN_DATA;
+    Java_Parallax_Enc_CrackWarTeamMC_hvi0;
+    Java_Parallax_Enc_CrackWarTeamMC_hvi1;
+    Java_Parallax_Enc_CrackWarTeamMC_hvi2;
+    Java_Parallax_Enc_CrackWarTeamMC_hvi3;
+    Java_Parallax_Enc_CrackWarTeamMC_hvi4;
+    Java_Parallax_Enc_CrackWarTeamMC_hvv0;
+    Java_Parallax_Enc_CrackWarTeamMC_hvv1;
+    Java_Parallax_Enc_CrackWarTeamMC_hvv2;
+    Java_Parallax_Enc_CrackWarTeamMC_hvv3;
+    Java_Parallax_Enc_CrackWarTeamMC_hvv4;
   local:
     *;
 };

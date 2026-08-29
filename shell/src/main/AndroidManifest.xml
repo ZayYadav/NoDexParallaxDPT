@@ -5,8 +5,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:name="com.parallax.shell.ParallaxKiSettingKarwaDo"
-        android:appComponentFactory="com.parallax.shell.ParallaxKoLadkiChahiye"
+        android:name="Parallax.Enc.Parallax1"
+        android:appComponentFactory="Parallax.Enc.Parallax2"
         android:allowBackup="false"
         android:extractNativeLibs="true"
         android:hasCode="true"

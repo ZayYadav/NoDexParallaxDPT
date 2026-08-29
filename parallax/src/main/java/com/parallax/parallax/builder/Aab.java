@@ -39,7 +39,7 @@ public class Aab extends AndroidPackage {
     public String getProxyComponentFactory() {
         return String.format(Locale.US, "%s.%s",
                 ShellConfig.getInstance().getShellPackageName(),
-                "ParallaxKoLadkiChahiye");
+                Const.KEY_COMPONENT_FACTORY_BASE_CLASS_NAME);
     }
 
     @Override

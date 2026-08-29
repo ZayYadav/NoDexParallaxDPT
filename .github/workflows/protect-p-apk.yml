@@ -95,6 +95,39 @@ jobs:
           test -s executable/shell-files/libs/arm/ParallaxLover.so
           test -s executable/shell-files/libs/arm64/ParallaxLover.so
 
+      - name: Verify release stub class mapping
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEX=executable/shell-files/dex/classes.dex
+          STRINGS="$RUNNER_TEMP/shell-dex-strings.txt"
+          strings "$DEX" > "$STRINGS"
+
+          for i in $(seq 1 14); do
+            name="Parallax${i}"
+            grep -Fq "$name" "$STRINGS" || {
+              echo "Expected mapped stub class is missing: $name" >&2
+              exit 1
+            }
+          done
+          for name in JangamBhai DarkDevel Keshav CrackWarTeamMC; do
+            grep -Fq "$name" "$STRINGS" || {
+              echo "Expected named stub class is missing: $name" >&2
+              exit 1
+            }
+          done
+          grep -Fq 'LParallax/Enc/CrackWarTeamMC;' "$STRINGS" || {
+            echo "High-value VM bridge is missing: Parallax.Enc.CrackWarTeamMC" >&2
+            exit 1
+          }
+
+          for banned in 'Lparallax/vm/' 'Lcom/parallax/shell/' 'Lcom/parallax/protection/'; do
+            if grep -Fq "$banned" "$STRINGS"; then
+              echo "Legacy release namespace leaked into shell DEX: $banned" >&2
+              exit 1
+            fi
+          done
+
       - name: Verify native bootstrap layout
         shell: bash
         run: |
@@ -122,8 +155,7 @@ jobs:
           import sys
 
           readelf, so_path = sys.argv[1:]
-          output = subprocess.check_output(
-              [readelf, "--sections", "--wide", so_path], text=True)
+          output = subprocess.check_output([readelf, "--sections", "--wide", so_path], text=True)
           sections = {}
           pattern = re.compile(
               r"^\s*\[\s*\d+\]\s+(\S+)\s+\S+\s+([0-9a-fA-F]+)\s+"
@@ -131,8 +163,7 @@ jobs:
           for line in output.splitlines():
               match = pattern.match(line)
               if match:
-                  sections[match.group(1)] = (
-                      int(match.group(2), 16), int(match.group(3), 16))
+                  sections[match.group(1)] = (int(match.group(2), 16), int(match.group(3), 16))
 
           bitcode_address, bitcode_size = sections[".bitcode"]
           plt_address, _ = sections[".plt"]
@@ -146,9 +177,7 @@ jobs:
               raise SystemExit(
                   f".plt overlaps the writable decryption range in {so_path}: "
                   f"plt=0x{plt_address:x}, bitcode_end=0x{bitcode_end:x}")
-          print(
-              f"Verified isolated .bitcode pages in {so_path}: "
-              f"0x{bitcode_address:x}-0x{bitcode_end:x}")
+          print(f"Verified isolated .bitcode pages in {so_path}: 0x{bitcode_address:x}-0x{bitcode_end:x}")
           PY
           done
 
@@ -216,36 +245,49 @@ jobs:
           "$AAPT2" dump xmltree "$APK" --file AndroidManifest.xml > "$MANIFEST_DUMP"
           unzip -p "$APK" classes.dex | strings > "$DEX_STRINGS"
 
-          EXPECTED_APP="com.parallax.protection.ParallaxKiSettingKarwaDo"
-          EXPECTED_FACTORY="com.parallax.protection.ParallaxKoLadkiChahiye"
+          EXPECTED_APP="Parallax.Enc.Parallax1"
+          EXPECTED_FACTORY="Parallax.Enc.Parallax2"
 
           grep -Fq "$EXPECTED_APP" "$MANIFEST_DUMP" || {
-            echo "Protected manifest does not point to the current bootstrap Application: $EXPECTED_APP" >&2
+            echo "Protected manifest does not point to the mapped bootstrap Application: $EXPECTED_APP" >&2
             cat "$MANIFEST_DUMP" >&2
             exit 1
           }
           grep -Fq "$EXPECTED_FACTORY" "$MANIFEST_DUMP" || {
-            echo "Protected manifest does not point to the current component factory: $EXPECTED_FACTORY" >&2
+            echo "Protected manifest does not point to the mapped component factory: $EXPECTED_FACTORY" >&2
             cat "$MANIFEST_DUMP" >&2
             exit 1
           }
-          if grep -Fq "ParallaxKoChummiDedo" "$MANIFEST_DUMP" "$DEX_STRINGS"; then
-            echo "Legacy bootstrap class name leaked into protected APK" >&2
-            exit 1
-          fi
 
-          grep -Fq "ParallaxKiSettingKarwaDo" "$DEX_STRINGS" || {
-            echo "Bootstrap Application class is absent from classes.dex" >&2
+          for i in $(seq 1 14); do
+            name="Parallax${i}"
+            grep -Fq "$name" "$DEX_STRINGS" || {
+              echo "Mapped protection class is absent from protected classes.dex: $name" >&2
+              exit 1
+            }
+          done
+          for name in JangamBhai DarkDevel Keshav CrackWarTeamMC; do
+            grep -Fq "$name" "$DEX_STRINGS" || {
+              echo "Named protection class is absent from protected classes.dex: $name" >&2
+              exit 1
+            }
+          done
+          grep -Fq 'LParallax/Enc/CrackWarTeamMC;' "$DEX_STRINGS" || {
+            echo "High-value VM bridge is absent from protected classes.dex" >&2
             exit 1
           }
-          grep -Fq "ParallaxKoLadkiChahiye" "$DEX_STRINGS" || {
-            echo "Bootstrap component factory is absent from classes.dex" >&2
-            exit 1
-          }
+
+          for banned in 'Lparallax/vm/' 'Lcom/parallax/shell/' 'Lcom/parallax/protection/'; do
+            if grep -Fq "$banned" "$DEX_STRINGS"; then
+              echo "Legacy protection namespace leaked into protected APK: $banned" >&2
+              exit 1
+            fi
+          done
 
           echo "- Bootstrap Application: $EXPECTED_APP" >> "$GITHUB_STEP_SUMMARY"
           echo "- Component factory: $EXPECTED_FACTORY" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Legacy bootstrap name: absent" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Release namespace: Parallax.Enc only" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Named anchors: JangamBhai / DarkDevel / Keshav / CrackWarTeamMC verified" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload protected APK
         uses: actions/upload-artifact@v4

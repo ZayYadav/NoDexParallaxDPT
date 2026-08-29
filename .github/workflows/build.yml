@@ -46,7 +46,6 @@ jobs:
             echo "$(basename "$path"): $(git -C "$path" rev-parse HEAD)"
           }
 
-          # Match the revisions currently referenced by upstream luoyesiqiu/dpt-shell/main.
           fetch_dep https://github.com/zlib-ng/minizip-ng.git shell/src/main/cpp/external/minizip-ng fe5fedc365f7824ada0cf9a84fb79b30d5fc97a8
           fetch_dep https://github.com/bytedance/bhook.git shell/src/main/cpp/external/bhook c0a83d41e0820506068031149f5f0057cde0abfe
           fetch_dep https://github.com/luoyesiqiu/Dobby.git shell/src/main/cpp/external/Dobby f2f8a6a825d2c43aea598012b0dc8685eb6f651a
@@ -114,10 +113,59 @@ jobs:
           echo "- classes.dex: ${DEX_SIZE} bytes" >> "$GITHUB_STEP_SUMMARY"
           echo "- class definitions: ${CLASS_DEFS}" >> "$GITHUB_STEP_SUMMARY"
 
-          # Six source-level stub components are required; R8 may add a small number of
-          # synthetic classes (for desugaring/lambdas). Keep the resulting bootstrap tightly bounded.
-          if [ "$CLASS_DEFS" -lt 6 ] || [ "$CLASS_DEFS" -gt 16 ]; then
-            echo "Expected a compact protection bootstrap with 6-16 class definitions, got ${CLASS_DEFS}" >&2
+          MAPPING=shell/build/outputs/mapping/release/mapping.txt
+          if [ -s "$MAPPING" ]; then
+            echo "--- R8 shell class mapping ---"
+            grep -E '^(com\.parallax\.|parallax\.vm\.)' "$MAPPING" || true
+          fi
+          echo "--- Release DEX class descriptors ---"
+          python3 - "$DEX" <<'PY'
+          import struct, sys
+
+          data = open(sys.argv[1], 'rb').read()
+          if len(data) < 112 or not data.startswith(b'dex\n'):
+              raise SystemExit('invalid dex header')
+
+          string_ids_size, string_ids_off = struct.unpack_from('<II', data, 56)
+          type_ids_size, type_ids_off = struct.unpack_from('<II', data, 64)
+          class_defs_size, class_defs_off = struct.unpack_from('<II', data, 96)
+
+          def read_uleb128(off):
+              value = 0
+              shift = 0
+              while True:
+                  b = data[off]
+                  off += 1
+                  value |= (b & 0x7f) << shift
+                  if not (b & 0x80):
+                      return value, off
+                  shift += 7
+                  if shift > 35:
+                      raise ValueError('bad uleb128')
+
+          def dex_string(index):
+              if index >= string_ids_size:
+                  raise ValueError('bad string index')
+              (off,) = struct.unpack_from('<I', data, string_ids_off + index * 4)
+              _, off = read_uleb128(off)
+              end = data.index(0, off)
+              return data[off:end].decode('utf-8', 'replace')
+
+          descriptors = []
+          for i in range(class_defs_size):
+              (class_idx,) = struct.unpack_from('<I', data, class_defs_off + i * 32)
+              if class_idx >= type_ids_size:
+                  raise ValueError('bad class type index')
+              (string_idx,) = struct.unpack_from('<I', data, type_ids_off + class_idx * 4)
+              descriptors.append(dex_string(string_idx))
+          for descriptor in sorted(descriptors):
+              print(descriptor)
+          PY
+
+          # Fourteen numbered shell classes + four named anchors are retained. Allow a
+          # few R8/desugaring helpers, but every retained project class must use Parallax.Enc.
+          if [ "$CLASS_DEFS" -lt 18 ] || [ "$CLASS_DEFS" -gt 34 ]; then
+            echo "Expected a compact protection bootstrap with 18-34 class definitions, got ${CLASS_DEFS}" >&2
             exit 1
           fi
 
@@ -125,6 +173,33 @@ jobs:
             echo "Protection bootstrap DEX is larger than 128 KiB (${DEX_SIZE} bytes)" >&2
             exit 1
           fi
+
+          STRINGS="$RUNNER_TEMP/release-shell-strings.txt"
+          strings "$DEX" > "$STRINGS"
+          for i in $(seq 1 14); do
+            name="Parallax${i}"
+            grep -Fq "$name" "$STRINGS" || {
+              echo "Mapped release stub class missing from shell DEX: $name" >&2
+              exit 1
+            }
+          done
+          for name in JangamBhai DarkDevel Keshav CrackWarTeamMC; do
+            grep -Fq "$name" "$STRINGS" || {
+              echo "Mapped release stub anchor missing from shell DEX: $name" >&2
+              exit 1
+            }
+          done
+          grep -Fq 'LParallax/Enc/CrackWarTeamMC;' "$STRINGS" || {
+            echo "High-value VM bridge missing from shell DEX: Parallax.Enc.CrackWarTeamMC" >&2
+            exit 1
+          }
+
+          for banned in 'Lparallax/vm/' 'Lcom/parallax/shell/' 'Lcom/parallax/protection/'; do
+            if grep -Fq "$banned" "$STRINGS"; then
+              echo "Legacy release namespace leaked into shell DEX: $banned" >&2
+              exit 1
+            fi
+          done
 
           for abi in arm arm64; do
             test -s "executable/shell-files/libs/${abi}/ParallaxLover.so"
@@ -135,8 +210,6 @@ jobs:
             exit 1
           fi
 
-          # The matching key is carried by the CLI manifest. It must never be duplicated
-          # as a plaintext shell-files sidecar that gets uploaded with native artifacts.
           if [ -e executable/shell-files/build-key ]; then
             echo "Plaintext build-key sidecar must not be present in release artifacts" >&2
             exit 1
@@ -163,7 +236,6 @@ jobs:
               echo "Missing GNU_RELRO in $SO" >&2
               exit 1
             }
-
             "$READELF" -dW "$SO" | grep -Eq '\(BIND_NOW\)|FLAGS.*NOW' || {
               echo "Missing immediate binding (-z now) in $SO" >&2
               exit 1
@@ -180,7 +252,7 @@ jobs:
             fi
 
             EXPORTS=$("$NM" -D --defined-only "$SO" | awk '{print $3}' | sed '/^$/d' | sort -u)
-            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|PARALLAX_UNKNOWN_DATA)$' || true)
+            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|PARALLAX_UNKNOWN_DATA|Java_Parallax_Enc_CrackWarTeamMC_(hvi|hvv)[0-4])$' || true)
             if [ -n "$UNEXPECTED" ]; then
               echo "Unexpected exported native symbols in $SO:" >&2
               printf '%s\n' "$UNEXPECTED" >&2
@@ -194,6 +266,14 @@ jobs:
               echo "Build-time native key patch symbol is not exported in $SO" >&2
               exit 1
             }
+            for kind in hvi hvv; do
+              for n in $(seq 0 4); do
+                printf '%s\n' "$EXPORTS" | grep -qx "Java_Parallax_Enc_CrackWarTeamMC_${kind}${n}" || {
+                  echo "Missing CrackWarTeamMC JNI export: ${kind}${n}" >&2
+                  exit 1
+                }
+              done
+            done
 
             if "$READELF" -SW "$SO" | grep -q '[[:space:]]\.symtab[[:space:]]'; then
               echo "Release $SO still contains a static symbol table" >&2
@@ -203,10 +283,8 @@ jobs:
 
           echo "### Native ELF hardening" >> "$GITHUB_STEP_SUMMARY"
           echo "- ABIs: armeabi-v7a + arm64-v8a only" >> "$GITHUB_STEP_SUMMARY"
-          echo "- GNU RELRO: enforced" >> "$GITHUB_STEP_SUMMARY"
-          echo "- immediate binding (BIND_NOW): enforced" >> "$GITHUB_STEP_SUMMARY"
-          echo "- executable stack: rejected" >> "$GITHUB_STEP_SUMMARY"
-          echo "- dynamic exports: restricted to JNI_OnLoad + build-time key patch symbol" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GNU RELRO + BIND_NOW + NX stack: enforced" >> "$GITHUB_STEP_SUMMARY"
+          echo "- dynamic exports: JNI_OnLoad, build-key patch symbol, Parallax.Enc CrackWarTeamMC JNI only" >> "$GITHUB_STEP_SUMMARY"
           echo "- static symbol table in release SO: rejected" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release artifacts

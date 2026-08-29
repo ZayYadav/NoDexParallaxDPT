@@ -13,6 +13,8 @@ set(PARALLAX_NATIVE_SOURCE
         parallax_hardening.cpp
         parallax_runtime_guard.cpp
         parallax_policy.cpp
+        parallax_vm4.cpp
+        parallax_vm_exports.cpp
         rc4/rc4.c
         common/parallax_string.c
         dex/dex_file.cpp

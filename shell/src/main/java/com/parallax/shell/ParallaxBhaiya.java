@@ -24,9 +24,16 @@ final class ParallaxBhaiya {
     static final int VIRTUAL = 3;
     static final int DEBUG_OR_TAMPER = 4;
 
-    private static final int NATIVE_TRACER = 1;
-    private static final int NATIVE_VIRTUAL = 2;
-    private static final int NATIVE_HOOK_FRAMEWORK = 4;
+    // Bit contract returned by ParallaxKiSettingKarwaDo.securityStatus(). Keeping the
+    // native entry point on the dynamically registered bootstrap class avoids a
+    // class-name-bound JNI symbol on this class, so R8 may deterministically map it to
+    // Parallax7 and the later shell-package rename remains safe.
+    private static final int NATIVE_ROOT = 1;
+    private static final int NATIVE_DEBUGGABLE = 1 << 1;
+    private static final int NATIVE_TRACER = 1 << 2;
+    private static final int NATIVE_HOOK_FRAMEWORK = 1 << 3;
+    private static final int NATIVE_PAYLOAD_TAMPER = 1 << 4;
+    private static final int NATIVE_RUNTIME_TAMPER = 1 << 5;
 
     /*
      * Put SHA-256(ANDROID_ID) values here to authorize selected phones while
@@ -37,8 +44,6 @@ final class ParallaxBhaiya {
 
     private ParallaxBhaiya() {
     }
-
-    private static native int nativeEnvironmentState();
 
     static int evaluateEarly() {
         if (Global.sProtectionBlockReason != CLEAR) {
@@ -65,9 +70,15 @@ final class ParallaxBhaiya {
             return Global.sProtectionBlockReason;
         }
         try {
-            int flags = nativeEnvironmentState();
-            if ((flags & NATIVE_VIRTUAL) != 0) return block(VIRTUAL);
-            if ((flags & (NATIVE_TRACER | NATIVE_HOOK_FRAMEWORK)) != 0) {
+            // securityStatus is registered through the configured JNI bootstrap class,
+            // so it survives both R8 class mapping and the per-APK shell package rename.
+            int flags = ParallaxKiSettingKarwaDo.securityStatus(null);
+            if ((flags & NATIVE_ROOT) != 0) return block(ROOT);
+            if ((flags & (NATIVE_DEBUGGABLE
+                    | NATIVE_TRACER
+                    | NATIVE_HOOK_FRAMEWORK
+                    | NATIVE_PAYLOAD_TAMPER
+                    | NATIVE_RUNTIME_TAMPER)) != 0) {
                 return block(DEBUG_OR_TAMPER);
             }
         } catch (Throwable ignored) {

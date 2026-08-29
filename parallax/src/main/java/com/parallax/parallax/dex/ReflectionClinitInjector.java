@@ -15,6 +15,7 @@ import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstructio
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction31i;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction35c;
 import com.android.tools.smali.dexlib2.immutable.reference.ImmutableMethodReference;
+import com.parallax.parallax.config.Const;
 import com.parallax.parallax.config.ProtectRules;
 import com.parallax.parallax.util.LogUtils;
 
@@ -145,14 +146,15 @@ public final class ReflectionClinitInjector {
     }
 
     private static String gateClassSig(String jniClassSig) {
+        final String fallback = "Lcom/parallax/shell/" + Const.KEY_GATE_BASE_CLASS_NAME + ";";
         if (jniClassSig == null) {
-            return "Lcom/parallax/shell/ParallaxGate;";
+            return fallback;
         }
         int slash = jniClassSig.lastIndexOf('/');
         if (slash <= 0) {
-            return "Lcom/parallax/shell/ParallaxGate;";
+            return fallback;
         }
-        return jniClassSig.substring(0, slash + 1) + "ParallaxGate;";
+        return jniClassSig.substring(0, slash + 1) + Const.KEY_GATE_BASE_CLASS_NAME + ";";
     }
 
     private static int gateValue(int a, int b, int c) {

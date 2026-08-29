@@ -11,9 +11,9 @@ import org.junit.Test;
 
 public class BootstrapManifestNamesTest {
 
-    private static final String SHELL_PACKAGE = "com.parallax.protection";
-    private static final String APPLICATION = SHELL_PACKAGE + ".ParallaxKiSettingKarwaDo";
-    private static final String FACTORY = SHELL_PACKAGE + ".ParallaxKoLadkiChahiye";
+    private static final String SHELL_PACKAGE = "Parallax.Enc";
+    private static final String APPLICATION = SHELL_PACKAGE + ".Parallax1";
+    private static final String FACTORY = SHELL_PACKAGE + ".Parallax2";
 
     @Before
     public void setUp() {
@@ -25,7 +25,7 @@ public class BootstrapManifestNamesTest {
         Apk apk = new Apk.Builder().build();
         assertEquals(APPLICATION, apk.getProxyApplicationName());
         assertEquals(FACTORY, apk.getProxyComponentFactory());
-        assertFalse(apk.getProxyApplicationName().contains("ParallaxKoChummiDedo"));
+        assertFalse(apk.getProxyApplicationName().contains("ParallaxKiSettingKarwaDo"));
     }
 
     @Test
@@ -33,13 +33,22 @@ public class BootstrapManifestNamesTest {
         Aab aab = new Aab.Builder().build();
         assertEquals(APPLICATION, aab.getProxyApplicationName());
         assertEquals(FACTORY, aab.getProxyComponentFactory());
-        assertFalse(aab.getProxyApplicationName().contains("ParallaxKoChummiDedo"));
+        assertFalse(aab.getProxyApplicationName().contains("ParallaxKoLadkiChahiye"));
     }
 
     @Test
     public void jniBootstrapClassNameMatchesApplicationClass() {
-        assertEquals("ParallaxKiSettingKarwaDo", Const.KEY_JNI_BASE_CLASS_NAME);
-        assertEquals("Lcom/parallax/protection/ParallaxKiSettingKarwaDo;",
+        assertEquals("Parallax1", Const.KEY_JNI_BASE_CLASS_NAME);
+        assertEquals("Parallax2", Const.KEY_COMPONENT_FACTORY_BASE_CLASS_NAME);
+        assertEquals("Parallax3", Const.KEY_GATE_BASE_CLASS_NAME);
+        assertEquals("LParallax/Enc/Parallax1;",
                 ShellConfig.getInstance().getJniClassNameSig());
+    }
+
+    @Test
+    public void staleProtectionNamespaceCannotOverrideReleaseAbi() {
+        ShellConfig.getInstance().init("com.parallax.protection");
+        assertEquals(SHELL_PACKAGE, ShellConfig.getInstance().getShellPackageName());
+        assertEquals(APPLICATION, new Apk.Builder().build().getProxyApplicationName());
     }
 }

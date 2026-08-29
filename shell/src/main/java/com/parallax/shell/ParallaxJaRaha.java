@@ -4,21 +4,54 @@ import com.parallax.shell.util.EnvUtils;
 
 import java.io.File;
 
-/** Tiny JNI bridge. Runtime work stays in the existing native library. */
+/**
+ * Thin Java bridge retained as the deterministic Parallax11 shell ABI anchor.
+ * Native methods are owned by the dynamically registered bootstrap Application;
+ * keeping this class non-native lets R8 apply its fixed Parallax11 mapping safely.
+ */
 public final class ParallaxJaRaha {
     private ParallaxJaRaha() {
     }
 
-    public static native void craoc(String applicationClassName);
-    public static native void ia();
-    public static native String rcf();
-    public static native void cbde(ClassLoader targetClassLoader);
-    public static native void rde(ClassLoader classLoader, String elementName);
-    public static native String gap();
-    public static native String gdp();
-    public static native Object ra(String originApplicationClassName);
-    public static native String rapn();
-    public static native void clinit();
+    public static void craoc(String applicationClassName) {
+        ParallaxKiSettingKarwaDo.craoc(applicationClassName);
+    }
+
+    public static void ia() {
+        ParallaxKiSettingKarwaDo.ia();
+    }
+
+    public static String rcf() {
+        return ParallaxKiSettingKarwaDo.rcf();
+    }
+
+    public static void cbde(ClassLoader targetClassLoader) {
+        ParallaxKiSettingKarwaDo.cbde(targetClassLoader);
+    }
+
+    public static void rde(ClassLoader classLoader, String elementName) {
+        ParallaxKiSettingKarwaDo.rde(classLoader, elementName);
+    }
+
+    public static String gap() {
+        return ParallaxKiSettingKarwaDo.gap();
+    }
+
+    public static String gdp() {
+        return ParallaxKiSettingKarwaDo.gdp();
+    }
+
+    public static Object ra(String originApplicationClassName) {
+        return ParallaxKiSettingKarwaDo.ra(originApplicationClassName);
+    }
+
+    public static String rapn() {
+        return ParallaxKiSettingKarwaDo.rapn();
+    }
+
+    public static void clinit() {
+        ParallaxKiSettingKarwaDo.clinit();
+    }
 
     public static void loadShellLibs(String workspacePath) {
         String abi = EnvUtils.getAbiDirName();
