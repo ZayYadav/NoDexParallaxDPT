@@ -100,12 +100,10 @@ public class ShellConfig {
     }
 
     public void init(ShellConfig shellConfig) {
-        String requestedPackageName = shellConfig.getShellPackageName();
-        if (StringUtils.isBlank(requestedPackageName)
-                || Const.SHELL_PACKAGE_NAME_AUTO.equals(requestedPackageName)) {
-            requestedPackageName = Const.BRANDED_SHELL_PACKAGE_NAME;
-        }
-        this.shellPackageName = requestedPackageName;
+        // Runtime bootstrap names are an ABI, not a user-configurable cosmetic value.
+        // Force one namespace so stale protect-config files cannot write an Application
+        // class that is absent from the release shell DEX.
+        this.shellPackageName = Const.BRANDED_SHELL_PACKAGE_NAME;
         this.signatureConfig = shellConfig.getSignatureConfig();
         this.appSignSha256 = shellConfig.getAppSignSha256();
         this.riskCheckFlags = shellConfig.getRiskCheckFlags();
