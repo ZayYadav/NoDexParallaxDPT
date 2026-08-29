@@ -5,6 +5,7 @@ import com.parallax.parallax.builder.Aab;
 import com.parallax.parallax.builder.AndroidPackage;
 import com.parallax.parallax.builder.Apk;
 import com.parallax.parallax.config.Const;
+import com.parallax.parallax.dex.HighValueVmCoordinator;
 import com.parallax.parallax.util.*;
 
 import org.apache.commons.cli.CommandLine;
@@ -29,6 +30,7 @@ import java.util.jar.Manifest;
 public class Parallax {
 
     private static final String MANIFEST_BUILD_KEY_ATTR = "Parallax-Build-Key";
+    private static final String OPTION_HIGH_VALUE_METHODS = "high-value-methods";
 
     public static void main(String[] args) {
         try {
@@ -114,6 +116,9 @@ public class Parallax {
         options.addOption(new Option(Const.OPTION_KEEP_CLASSES, Const.OPTION_KEEP_CLASSES_LONG, false, "Keeping some classes in the package can improve the app's startup speed to a certain extent, but it is not supported by some application packages.\n"));
         options.addOption(new Option(Const.OPTION_SMALLER, Const.OPTION_SMALLER_LONG, false, "Trade some of the app's performance for a smaller app size.\n"));
         options.addOption(new Option(Const.OPTION_PROTECT_CONFIG, Const.OPTION_PROTECT_CONFIG_LONG, true, "Protect config file.\n"));
+        options.addOption(new Option(null, OPTION_HIGH_VALUE_METHODS, true,
+                "Move explicitly selected static primitive methods out of DEX into the encrypted native Parallax VM. "
+                        + "Rules use canonical signatures such as Lcom/example/Security;->mix(III)I. APK only.\n"));
         options.addOption(new Option(Const.OPTION_EXCLUDE_ABI, Const.OPTION_EXCLUDE_ABI_LONG, true, "Exclude specific ABIs (comma separated, e.g. x86,x86_64). \n"
                 + "Supported ABIs:\n"
                 + "- arm       (armeabi-v7a)\n"
@@ -141,7 +146,6 @@ public class Parallax {
 
             LogUtils.setOpenNoisyLog(commandLine.hasOption(Const.OPTION_OPEN_NOISY_LOG_LONG));
 
-
             List<String> excludedAbi = new ArrayList<>();
             if (commandLine.hasOption(Const.OPTION_EXCLUDE_ABI)) {
                 String excludeAbiStr = commandLine.getOptionValue(Const.OPTION_EXCLUDE_ABI);
@@ -154,6 +158,7 @@ public class Parallax {
             }
 
             String filePath = commandLine.getOptionValue(Const.OPTION_INPUT_FILE);
+            HighValueVmCoordinator.setRulesPath(commandLine.getOptionValue(OPTION_HIGH_VALUE_METHODS));
 
             int riskCheckFlags = 0;
             if (commandLine.hasOption(Const.OPTION_DISABLE_FRIDA_DETECT_LONG)) {
@@ -184,6 +189,10 @@ public class Parallax {
                         .build();
             }
             else if(filePath.endsWith(".aab")) {
+                if (HighValueVmCoordinator.isEnabled()) {
+                    usage(options, "--high-value-methods is currently APK-only; AAB protection is unchanged.");
+                    return null;
+                }
                 return new Aab.Builder()
                         .filePath(filePath)
                         .outputPath(commandLine.getOptionValue(Const.OPTION_OUTPUT_PATH))
