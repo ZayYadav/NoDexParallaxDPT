@@ -24,7 +24,7 @@ import java.util.List;
 public class HighValueVmAutoScanTest {
 
     @Test
-    public void autoScanSelectsSupportedAndLeavesUnsupportedForNormalDpt() throws Exception {
+    public void autoScanSelectsOnlyVerifierSafeStaticIntAbi() throws Exception {
         File dir = Files.createTempDirectory("parallax-auto-vm").toFile();
         File dex = new File(dir, "classes.dex");
         try {
@@ -33,6 +33,9 @@ public class HighValueVmAutoScanTest {
                             | AccessFlags.STATIC.getValue());
             ImmutableMethod unsupportedInstance = intConstantMethod(
                     "Lsample/AutoVm;", "instanceMethod", AccessFlags.PUBLIC.getValue());
+            ImmutableMethod unsupportedBoolean = booleanConstantMethod(
+                    "Lsample/AutoVm;", "booleanMethod", AccessFlags.PUBLIC.getValue()
+                            | AccessFlags.STATIC.getValue());
 
             ImmutableClassDef clazz = new ImmutableClassDef(
                     "Lsample/AutoVm;",
@@ -42,16 +45,16 @@ public class HighValueVmAutoScanTest {
                     null,
                     null,
                     null,
-                    List.of(supported, unsupportedInstance));
+                    List.of(supported, unsupportedInstance, unsupportedBoolean));
             DexFileFactory.writeDexFile(dex.getAbsolutePath(),
                     new ImmutableDexFile(Opcodes.getDefault(), List.of(clazz)));
 
             HighValueVmTransformer.AutoScanResult result =
                     HighValueVmTransformer.scanAutoCandidates(dex, 4096, 175000);
 
-            assertEquals(2, result.getScanned());
+            assertEquals(3, result.getScanned());
             assertEquals(1, result.getCompatible());
-            assertEquals(1, result.getUnsupported());
+            assertEquals(2, result.getUnsupported());
             assertEquals(1, result.getSelected());
             assertEquals(0, result.getDeferredByLimit());
             assertEquals(2, result.getSelectedOps());
@@ -95,18 +98,27 @@ public class HighValueVmAutoScanTest {
     }
 
     private static ImmutableMethod intConstantMethod(String owner, String name, int flags) {
+        return constantMethod(owner, name, "I", flags, 7);
+    }
+
+    private static ImmutableMethod booleanConstantMethod(String owner, String name, int flags) {
+        return constantMethod(owner, name, "Z", flags, 1);
+    }
+
+    private static ImmutableMethod constantMethod(
+            String owner, String name, String returnType, int flags, int value) {
         return new ImmutableMethod(
                 owner,
                 name,
                 Collections.emptyList(),
-                "I",
+                returnType,
                 flags,
                 null,
                 null,
                 new ImmutableMethodImplementation(
                         1,
                         List.of(
-                                new ImmutableInstruction31i(Opcode.CONST, 0, 7),
+                                new ImmutableInstruction31i(Opcode.CONST, 0, value),
                                 new ImmutableInstruction11x(Opcode.RETURN, 0)),
                         null,
                         null));
