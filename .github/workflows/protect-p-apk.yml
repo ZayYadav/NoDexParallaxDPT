@@ -193,20 +193,44 @@ jobs:
           echo "Source P.apk: $(stat -c '%s' "$RUNNER_TEMP/P.apk") bytes"
           sha256sum "$RUNNER_TEMP/P.apk"
 
-      - name: Protect P.apk with fresh shell
+      - name: Protect P.apk with runtime-safe automatic VM
         shell: bash
         run: |
           set -euo pipefail
           OUT_DIR="$RUNNER_TEMP/parallax-protected"
           FINAL_DIR="$GITHUB_WORKSPACE/protected-artifact"
+          PROTECT_LOG="$RUNNER_TEMP/parallax-protect.log"
           mkdir -p "$OUT_DIR" "$FINAL_DIR"
 
           pushd executable >/dev/null
           java -jar parallax.jar \
             -f "$RUNNER_TEMP/P.apk" \
             -o "$OUT_DIR" \
-            --high-value-auto
+            --high-value-auto 2>&1 | tee "$PROTECT_LOG"
           popd >/dev/null
+
+          grep -Fq 'High-value AUTO VM runtime-safe scope:' "$PROTECT_LOG" || {
+            echo "Automatic VM did not report its runtime-safe application scope" >&2
+            exit 1
+          }
+
+          for forbidden in \
+            'Lcom/mundo/' \
+            'Landroid/' \
+            'Landroidx/' \
+            'Ljava/' \
+            'Ljavax/' \
+            'Lkotlin/' \
+            'Lkotlinx/' \
+            'Lcom/google/' \
+            'LParallax/' \
+            'Lcom/parallax/'; do
+            if grep -Fq "High-value VM: moved ${forbidden}" "$PROTECT_LOG"; then
+              echo "Runtime/framework method was automatically virtualized: $forbidden" >&2
+              grep -F "High-value VM: moved ${forbidden}" "$PROTECT_LOG" >&2 || true
+              exit 1
+            fi
+          done
 
           mapfile -t APKS < <(find "$OUT_DIR" -type f -name '*.apk' -size +0c | sort)
           if [ "${#APKS[@]}" -eq 0 ]; then
@@ -231,13 +255,13 @@ jobs:
 
           apk = sys.argv[1]
           with zipfile.ZipFile(apk) as archive:
-              try:
+              if "assets/Parallax.vm" not in archive.namelist():
+                  print("No runtime-safe app-owned PVM4 candidate found; normal DPT only for this APK")
+              else:
                   payload = archive.read("assets/Parallax.vm")
-              except KeyError as exc:
-                  raise SystemExit("--high-value-auto produced no assets/Parallax.vm payload") from exc
-              if len(payload) <= 20 or payload[:4] != b"PVM4":
-                  raise SystemExit("automatic high-value payload is missing or is not PVM4")
-              print(f"Verified automatic PVM4 payload: {len(payload)} bytes")
+                  if len(payload) <= 20 or payload[:4] != b"PVM4":
+                      raise SystemExit("automatic high-value payload exists but is not valid PVM4")
+                  print(f"Verified runtime-safe automatic PVM4 payload: {len(payload)} bytes")
           PY
           cp "$PROTECTED_APK" "$FINAL_DIR/P-Parallax-Protected.apk"
 
@@ -246,7 +270,8 @@ jobs:
           echo "### Protected P.apk" >> "$GITHUB_STEP_SUMMARY"
           echo "- Source: main/P.apk" >> "$GITHUB_STEP_SUMMARY"
           echo "- Output: P-Parallax-Protected.apk" >> "$GITHUB_STEP_SUMMARY"
-          echo "- High-value VM: automatic compatible-method selection (PVM4)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- High-value VM: runtime-safe app-owned automatic selection" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Runtime/framework auto-VM denylist: verified" >> "$GITHUB_STEP_SUMMARY"
           echo "- Size: $(stat -c '%s' "$FINAL_DIR/P-Parallax-Protected.apk") bytes" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify protected startup bootstrap wiring
