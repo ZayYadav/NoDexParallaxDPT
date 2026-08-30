@@ -1,6 +1,7 @@
 package com.parallax.parallax.dex;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import com.android.tools.smali.dexlib2.AccessFlags;
@@ -63,6 +64,29 @@ public class HighValueVmAutoScanTest {
         } finally {
             deleteRecursively(dir);
         }
+    }
+
+    @Test
+    public void autoScopeAllowsOnlyApplicationOwnedMethods() {
+        assertTrue(HighValueVmCoordinator.isAutoRuleAllowedForPackage(
+                "Lcom/example/app/Security;->mix(II)I", "com.example.app"));
+        assertTrue(HighValueVmCoordinator.isAutoRuleAllowedForPackage(
+                "Lcom/example/app/internal/Token;->check(I)I", "com.example.app"));
+
+        assertFalse(HighValueVmCoordinator.isAutoRuleAllowedForPackage(
+                "Lcom/mundo/core/system/user/BUserHandle;->getUid(II)I", "com.example.app"));
+        assertFalse(HighValueVmCoordinator.isAutoRuleAllowedForPackage(
+                "Landroidx/core/Foo;->a(I)I", "com.example.app"));
+        assertFalse(HighValueVmCoordinator.isAutoRuleAllowedForPackage(
+                "Le/i0;->a()I", "com.example.app"));
+        assertFalse(HighValueVmCoordinator.isAutoRuleAllowedForPackage(
+                "Lcom/example/app/Security;->mix(II)I", ""));
+
+        // Even if a protected package itself happens to use a known runtime namespace,
+        // automatic VM discovery never rewrites that infrastructure. Manual rules remain
+        // the explicit opt-in path for unusual applications that deliberately own it.
+        assertFalse(HighValueVmCoordinator.isAutoRuleAllowedForPackage(
+                "Lcom/mundo/core/system/user/BUserHandle;->getUid(II)I", "com.mundo.core"));
     }
 
     @Test
