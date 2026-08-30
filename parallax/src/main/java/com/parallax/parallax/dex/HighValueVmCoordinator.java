@@ -209,43 +209,42 @@ public final class HighValueVmCoordinator {
         int unsupported = 0;
         int rejectedByScope = 0;
         int deferred = 0;
-        int selectedOps = 0;
+        int probeOps = 0;
 
         for (File dex : dexFiles) {
             if (remainingPrograms <= 0 || remainingOps <= 0) break;
 
-            // Probe broadly enough to discover app-owned candidates even if dependencies occur
-            // earlier in DEX iteration order. Native limits are applied after runtime-scope filtering.
             HighValueVmTransformer.AutoScanResult scan = HighValueVmTransformer.scanAutoCandidates(
-                    dex, MAX_VM_PROGRAMS, MAX_AUTO_SEMANTIC_OPS);
+                    dex, MAX_VM_PROGRAMS, remainingOps);
             scanned += scan.getScanned();
             compilerCompatible += scan.getCompatible();
             unsupported += scan.getUnsupported();
+            probeOps += scan.getSelectedOps();
 
             for (HighValueVmTransformer.Rule rule : scan.getRules()) {
                 if (!isAutoRuleAllowedForPackage(rule.getSource(), packageName)) {
                     rejectedByScope++;
                     continue;
                 }
-
-                int opCount = HighValueVmTransformer.countSemanticOps(dex, rule.getSource());
-                if (remainingPrograms <= 0 || opCount > remainingOps) {
+                if (remainingPrograms <= 0) {
                     deferred++;
                     continue;
                 }
                 rules.add(rule);
                 remainingPrograms--;
-                remainingOps -= opCount;
-                selectedOps += opCount;
             }
+
+            // Conservative accounting: probe ops include candidates later rejected by scope.
+            // This can reduce coverage, never exceed the native payload safety budget.
+            remainingOps = Math.max(0, remainingOps - scan.getSelectedOps());
             deferred += scan.getDeferredByLimit();
         }
 
         LogUtils.info(
                 "High-value AUTO VM report: scanned=%d compilerCompatible=%d appOwnedVirtualized=%d "
-                        + "unsupported=%d rejectedByRuntimeScope=%d deferredBySafetyLimit=%d semanticOps=%d/%d",
+                        + "unsupported=%d rejectedByRuntimeScope=%d deferredBySafetyLimit=%d probeSemanticOps=%d/%d",
                 scanned, compilerCompatible, rules.size(), unsupported, rejectedByScope, deferred,
-                selectedOps, MAX_AUTO_SEMANTIC_OPS);
+                probeOps, MAX_AUTO_SEMANTIC_OPS);
         if (rejectedByScope > 0) {
             LogUtils.info(
                     "High-value AUTO VM kept %d compiler-compatible dependency/runtime method(s) on normal DPT.",
