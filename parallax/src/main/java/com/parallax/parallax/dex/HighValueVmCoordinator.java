@@ -1,6 +1,7 @@
 package com.parallax.parallax.dex;
 
 import com.parallax.parallax.config.Const;
+import com.parallax.parallax.res.ApkManifestEditor;
 import com.parallax.parallax.util.LogUtils;
 
 import java.io.File;
@@ -25,6 +26,24 @@ public final class HighValueVmCoordinator {
      * native 16 MiB payload ceiling with room for per-program headers and the envelope.
      */
     public static final int MAX_AUTO_SEMANTIC_OPS = 175000;
+
+    /**
+     * Automatic discovery must never rewrite platform/framework/runtime infrastructure merely
+     * because a tiny helper happens to fit the scalar VM opcode subset. Those methods can be
+     * bootstrap critical and are not application business logic.
+     */
+    private static final String[] AUTO_DENY_CLASS_PREFIXES = {
+            "Landroid/",
+            "Landroidx/",
+            "Ljava/",
+            "Ljavax/",
+            "Lkotlin/",
+            "Lkotlinx/",
+            "Lcom/google/",
+            "Lcom/mundo/",
+            "LParallax/",
+            "Lcom/parallax/"
+    };
 
     private static volatile String rulesPath;
     private static volatile boolean autoEnabled;
@@ -73,8 +92,8 @@ public final class HighValueVmCoordinator {
     /**
      * Called from KeyUtils.generateKey(), which is the APK pipeline's main-thread choke point:
      * the package is already unzipped, while DEX gate injection/hollowing has not started yet.
-     * Manual mode is fail-closed. Auto mode probes methods first and only selects compiler-safe
-     * methods, so unsupported methods simply continue through normal DPT protection.
+     * Manual mode is fail-closed. Auto mode probes methods first and only selects compiler-safe,
+     * application-owned methods, so unsupported/framework/runtime methods continue through DPT.
      */
     public static synchronized int prepareCurrentWorkspace(byte[] encKey) throws IOException {
         if (!isEnabled() || prepared) return 0;
@@ -98,10 +117,10 @@ public final class HighValueVmCoordinator {
 
         List<HighValueVmTransformer.Rule> rules;
         if (autoEnabled) {
-            rules = discoverAutoRules(dexFiles);
+            rules = discoverAutoRules(workspace, dexFiles);
             if (rules.isEmpty()) {
                 prepared = true;
-                LogUtils.info("High-value AUTO VM: no compatible methods found; continuing with normal DPT only.");
+                LogUtils.info("High-value AUTO VM: no runtime-safe app-owned candidates; continuing with normal DPT only.");
                 return 0;
             }
         } else {
@@ -153,38 +172,87 @@ public final class HighValueVmCoordinator {
         return programs.size();
     }
 
-    private static List<HighValueVmTransformer.Rule> discoverAutoRules(List<File> dexFiles)
-            throws IOException {
+    /** Package-private for regression tests. */
+    static boolean isAutoRuleAllowedForPackage(String signature, String packageName) {
+        if (signature == null || packageName == null) return false;
+        String normalizedPackage = packageName.trim();
+        if (normalizedPackage.isEmpty()) return false;
+
+        String appPrefix = "L" + normalizedPackage.replace('.', '/') + "/";
+        if (!signature.startsWith(appPrefix)) return false;
+
+        for (String denied : AUTO_DENY_CLASS_PREFIXES) {
+            if (signature.startsWith(denied)) return false;
+        }
+        return true;
+    }
+
+    private static List<HighValueVmTransformer.Rule> discoverAutoRules(
+            File workspace, List<File> dexFiles) throws IOException {
+        File manifest = new File(workspace, "AndroidManifest.xml");
+        String packageName = manifest.isFile()
+                ? ApkManifestEditor.getPackageName(manifest.getAbsolutePath())
+                : null;
+        if (packageName == null || packageName.trim().isEmpty()) {
+            LogUtils.warn("High-value AUTO VM: package name unavailable; automatic virtualization disabled for runtime safety.");
+            return new ArrayList<>();
+        }
+
+        String appDexPrefix = "L" + packageName.trim().replace('.', '/') + "/";
+        LogUtils.info("High-value AUTO VM runtime-safe scope: %s", appDexPrefix);
+
         List<HighValueVmTransformer.Rule> rules = new ArrayList<>();
         int remainingPrograms = autoMaxPrograms;
         int remainingOps = MAX_AUTO_SEMANTIC_OPS;
         int scanned = 0;
-        int compatible = 0;
+        int compilerCompatible = 0;
         int unsupported = 0;
+        int rejectedByScope = 0;
         int deferred = 0;
-        int selectedOps = 0;
+        int probeOps = 0;
 
         for (File dex : dexFiles) {
+            if (remainingPrograms <= 0 || remainingOps <= 0) break;
+
             HighValueVmTransformer.AutoScanResult scan = HighValueVmTransformer.scanAutoCandidates(
-                    dex, remainingPrograms, remainingOps);
-            rules.addAll(scan.getRules());
+                    dex, MAX_VM_PROGRAMS, remainingOps);
             scanned += scan.getScanned();
-            compatible += scan.getCompatible();
+            compilerCompatible += scan.getCompatible();
             unsupported += scan.getUnsupported();
+            probeOps += scan.getSelectedOps();
+
+            for (HighValueVmTransformer.Rule rule : scan.getRules()) {
+                if (!isAutoRuleAllowedForPackage(rule.getSource(), packageName)) {
+                    rejectedByScope++;
+                    continue;
+                }
+                if (remainingPrograms <= 0) {
+                    deferred++;
+                    continue;
+                }
+                rules.add(rule);
+                remainingPrograms--;
+            }
+
+            // Conservative accounting: probe ops include candidates later rejected by scope.
+            // This can reduce coverage, never exceed the native payload safety budget.
+            remainingOps = Math.max(0, remainingOps - scan.getSelectedOps());
             deferred += scan.getDeferredByLimit();
-            selectedOps += scan.getSelectedOps();
-            remainingPrograms -= scan.getSelected();
-            remainingOps -= scan.getSelectedOps();
         }
 
         LogUtils.info(
-                "High-value AUTO VM report: scanned=%d compatible=%d virtualized=%d "
-                        + "unsupported=%d deferredBySafetyLimit=%d semanticOps=%d/%d",
-                scanned, compatible, rules.size(), unsupported, deferred,
-                selectedOps, MAX_AUTO_SEMANTIC_OPS);
+                "High-value AUTO VM report: scanned=%d compilerCompatible=%d appOwnedVirtualized=%d "
+                        + "unsupported=%d rejectedByRuntimeScope=%d deferredBySafetyLimit=%d probeSemanticOps=%d/%d",
+                scanned, compilerCompatible, rules.size(), unsupported, rejectedByScope, deferred,
+                probeOps, MAX_AUTO_SEMANTIC_OPS);
+        if (rejectedByScope > 0) {
+            LogUtils.info(
+                    "High-value AUTO VM kept %d compiler-compatible dependency/runtime method(s) on normal DPT.",
+                    rejectedByScope);
+        }
         if (deferred > 0) {
             LogUtils.warn(
-                    "High-value AUTO VM deferred %d compatible method(s) to normal DPT to stay within native limits.",
+                    "High-value AUTO VM deferred %d candidate method(s) to normal DPT to stay within native limits.",
                     deferred);
         }
         return rules;
