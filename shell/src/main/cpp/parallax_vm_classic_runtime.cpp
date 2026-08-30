@@ -6,6 +6,11 @@
 static std::optional<std::tuple<uint8_t*, size_t>> readClassicVmAsset(
         void *zipAddr, off_t zipSize, const char *entryName);
 
+// parallax_vm.cpp invokes its loader from execute() before the loader definition appears.
+// Because the public header has already been included under its original ABI name, declare
+// the private renamed symbol explicitly before macro-including the implementation.
+void loadHighValueVmClassic(JNIEnv *env);
+
 #define loadHighValueVm loadHighValueVmClassic
 #define highValueVmI0 highValueVmClassicI0
 #define highValueVmI1 highValueVmClassicI1
