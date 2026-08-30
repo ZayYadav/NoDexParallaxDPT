@@ -33,19 +33,17 @@ public class HighValueVmEntryGuardTransformerTest {
         File input = new File(dir, "classes.dex");
         File output = new File(dir, "classes.guarded.dex");
         try {
+            // Parameter-free synthetic methods keep this regression test independent of
+            // dexlib's MethodParameter constructor API. P.apk integration covers the real
+            // Bundle-taking Activity callbacks on every protection build.
             ImmutableMethod boxOnCreate = voidMethod(
-                    "Lcom/bgmi/BoxApplication;", "onCreate", Collections.emptyList(), 2);
-            ImmutableMethod loginOnCreate = voidMethod(
-                    "Lcom/bgmi/LogAct;", "onCreate", List.of("Landroid/os/Bundle;"), 3);
+                    "Lcom/bgmi/BoxApplication;", "onCreate", 2);
             ImmutableMethod loginHelper = voidMethod(
-                    "Lcom/bgmi/LogAct;", "q", Collections.emptyList(), 2);
-            ImmutableMethod mainOnCreate = voidMethod(
-                    "Lcom/bgmi/MAct;", "onCreate", List.of("Landroid/os/Bundle;"), 3);
+                    "Lcom/bgmi/LogAct;", "q", 2);
 
             List<ClassDef> classes = new ArrayList<>();
             classes.add(clazz("Lcom/bgmi/BoxApplication;", List.of(boxOnCreate)));
-            classes.add(clazz("Lcom/bgmi/LogAct;", List.of(loginOnCreate, loginHelper)));
-            classes.add(clazz("Lcom/bgmi/MAct;", List.of(mainOnCreate)));
+            classes.add(clazz("Lcom/bgmi/LogAct;", List.of(loginHelper)));
             DexFileFactory.writeDexFile(input.getAbsolutePath(),
                     new ImmutableDexFile(Opcodes.getDefault(), classes));
 
@@ -53,9 +51,9 @@ public class HighValueVmEntryGuardTransformerTest {
                     HighValueVmEntryGuardTransformer.transform(
                             input, output, 1, "LParallax/Enc/CrackWarTeamMC;", "com.bgmi", 4);
 
-            assertEquals(4, result.getGuarded());
-            assertEquals(4, result.getPrograms().size());
-            assertEquals(5, result.getNextMethodId());
+            assertEquals(2, result.getGuarded());
+            assertEquals(2, result.getPrograms().size());
+            assertEquals(3, result.getNextMethodId());
 
             DexBackedDexFile guarded = DexFileFactory.loadDexFile(output, Opcodes.getDefault());
             int checked = 0;
@@ -73,7 +71,7 @@ public class HighValueVmEntryGuardTransformerTest {
                     checked++;
                 }
             }
-            assertEquals(4, checked);
+            assertEquals(2, checked);
         } finally {
             deleteRecursively(dir);
         }
@@ -82,9 +80,7 @@ public class HighValueVmEntryGuardTransformerTest {
     private static boolean isExpected(Method method) {
         String owner = method.getDefiningClass();
         return (owner.endsWith("/BoxApplication;") && "onCreate".equals(method.getName()))
-                || (owner.endsWith("/LogAct;")
-                    && ("onCreate".equals(method.getName()) || "q".equals(method.getName())))
-                || (owner.endsWith("/MAct;") && "onCreate".equals(method.getName()));
+                || (owner.endsWith("/LogAct;") && "q".equals(method.getName()));
     }
 
     private static ImmutableClassDef clazz(String type, List<ImmutableMethod> methods) {
@@ -100,11 +96,11 @@ public class HighValueVmEntryGuardTransformerTest {
     }
 
     private static ImmutableMethod voidMethod(
-            String owner, String name, List<String> parameterTypes, int registerCount) {
+            String owner, String name, int registerCount) {
         return new ImmutableMethod(
                 owner,
                 name,
-                parameterTypes,
+                Collections.emptyList(),
                 "V",
                 AccessFlags.PUBLIC.getValue() | AccessFlags.FINAL.getValue(),
                 null,
