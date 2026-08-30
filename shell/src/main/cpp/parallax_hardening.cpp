@@ -1,3 +1,5 @@
+#include <dirent.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdint.h>
@@ -86,8 +88,7 @@ bool isDexBackedAnonymousName(const char *name) {
            || strstr(name, "InMemoryDexFile") != nullptr;
 }
 
-void markSensitiveAnonymousMappingsDontDump() {
-#ifdef MADV_DONTDUMP
+void hardenSensitiveAnonymousMappings() {
     FILE *fp = fopen("/proc/self/maps", "r");
     if (fp == nullptr) {
         return;
@@ -121,14 +122,73 @@ void markSensitiveAnonymousMappingsDontDump() {
 
         if (dex || heap ||
             (unnamed && privateMapping && writable && length >= MIN_ANON_REGION_SIZE)) {
+#ifdef MADV_DONTDUMP
             (void) madvise(reinterpret_cast<void *>(start),
                            static_cast<size_t>(length),
                            MADV_DONTDUMP);
+#endif
         }
+
+        // A common in-process dumper trick is to fork/clone after the protected DEX has
+        // been restored and let the child scrape a stable copy. On kernels that support
+        // MADV_WIPEONFORK, make only identified in-memory DEX VMAs become zero-filled in
+        // the child. Failure is deliberately ignored for file-backed/unsupported VMAs.
+#if defined(MADV_WIPEONFORK)
+        if (dex && privateMapping) {
+            (void) madvise(reinterpret_cast<void *>(start),
+                           static_cast<size_t>(length),
+                           MADV_WIPEONFORK);
+        }
+#endif
     }
 
     fclose(fp);
-#endif
+}
+
+bool hasSelfMemDescriptor() {
+    DIR *dir = opendir("/proc/self/fd");
+    if (dir == nullptr) {
+        return false;
+    }
+
+    bool found = false;
+    struct dirent *entry = nullptr;
+    while ((entry = readdir(dir)) != nullptr) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+
+        char linkPath[256] = {0};
+        char target[512] = {0};
+        int written = snprintf(linkPath, sizeof(linkPath), "/proc/self/fd/%s", entry->d_name);
+        if (written <= 0 || static_cast<size_t>(written) >= sizeof(linkPath)) {
+            continue;
+        }
+
+        ssize_t length = readlink(linkPath, target, sizeof(target) - 1);
+        if (length <= 0) {
+            continue;
+        }
+        target[length] = '\0';
+
+        // Legitimate Android application code has no reason to hold its own proc-mem
+        // device open. This specifically catches injected same-process dump helpers;
+        // descriptors belonging to other processes are not visible here.
+        if (strcmp(target, "/proc/self/mem") == 0) {
+            found = true;
+            break;
+        }
+
+        char pidMem[64] = {0};
+        snprintf(pidMem, sizeof(pidMem), "/proc/%d/mem", getpid());
+        if (strcmp(target, pidMem) == 0) {
+            found = true;
+            break;
+        }
+    }
+
+    closedir(dir);
+    return found;
 }
 
 bool processDumpingUnlocked() {
@@ -146,11 +206,12 @@ bool processDumpingUnlocked() {
 void *parallaxHardeningWatchdog(void *) {
     for (;;) {
         lockProcessDumping();
-        markSensitiveAnonymousMappingsDontDump();
+        hardenSensitiveAnonymousMappings();
 
         if (processDumpingUnlocked()
             || hasTracerPid()
-            || hasRuntimeInstrumentationMarker()) {
+            || hasRuntimeInstrumentationMarker()
+            || hasSelfMemDescriptor()) {
             terminateProtectedProcess();
         }
         usleep(WATCHDOG_INTERVAL_US);
@@ -161,13 +222,13 @@ void *parallaxHardeningWatchdog(void *) {
 
 // Apply process-level dump hardening as soon as the shell library is loaded and keep
 // reasserting it during the lifetime of the protected process. ART must retain read
-// access to InMemoryDexClassLoader buffers, so these pages are marked non-dumpable
-// instead of being made PROT_NONE, which would break legitimate class loading.
+// access to InMemoryDexClassLoader buffers, so live DEX pages stay readable inside the
+// process while being excluded from normal dump/fork-based extraction paths.
 __attribute__((constructor))
 static void parallax_harden_process() {
 #ifndef DEBUG
     lockProcessDumping();
-    markSensitiveAnonymousMappingsDontDump();
+    hardenSensitiveAnonymousMappings();
 
     pthread_t watchdog{};
     if (pthread_create(&watchdog, nullptr, parallaxHardeningWatchdog, nullptr) == 0) {
