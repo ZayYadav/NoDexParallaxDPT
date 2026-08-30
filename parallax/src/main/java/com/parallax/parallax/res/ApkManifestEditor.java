@@ -12,31 +12,48 @@ import pxb.android.axml.AxmlParser;
  * @author parallax
  */
 public class ApkManifestEditor {
+    /**
+     * Keep the framework-visible release ABI exactly as produced by the shell mapping.
+     * These helpers are deliberately side-effect free so the name contract can be covered
+     * by unit tests without having to manufacture a binary AndroidManifest.xml fixture.
+     */
+    static String resolveApplicationName(String newApplicationName) {
+        return newApplicationName;
+    }
+
+    static String resolveAppComponentFactoryName(String newComponentFactory) {
+        return newComponentFactory;
+    }
+
+    /**
+     * Write the exact release bootstrap Application name supplied by Apk.
+     *
+     * The shell release build uses a deterministic R8 mapping:
+     *   com.parallax.shell.ParallaxKiSettingKarwaDo -> Parallax.Enc.Parallax1
+     *
+     * Do not rewrite the class basename here. Doing so makes the protected manifest
+     * reference a class that is not present in the release shell dex and Android fails
+     * before Application.attachBaseContext() with ClassNotFoundException.
+     */
     public static void writeApplicationName(String inManifestFile, String outManifestFile, String newApplicationName){
-        if (newApplicationName != null) {
-            int lastDot = newApplicationName.lastIndexOf('.');
-            if (lastDot > 0) {
-                newApplicationName = newApplicationName.substring(0, lastDot + 1)
-                        + "ParallaxKiSettingKarwaDo";
-            }
-        }
         ModificationProperty property = new ModificationProperty();
-        property.addApplicationAttribute(new AttributeItem(NodeValue.Application.NAME,newApplicationName));
+        property.addApplicationAttribute(new AttributeItem(
+                NodeValue.Application.NAME,
+                resolveApplicationName(newApplicationName)));
         property.addUsesPermission("android.permission.INTERNET");
         FileProcesser.processManifestFile(inManifestFile, outManifestFile, property);
     }
 
+    /**
+     * Write the exact release AppComponentFactory name supplied by Apk.
+     * Parallax2 is the framework-visible release ABI and must stay in sync with
+     * stub-obfuscation.map / Const.KEY_COMPONENT_FACTORY_BASE_CLASS_NAME.
+     */
     public static void writeAppComponentFactory(String inManifestFile, String outManifestFile, String newComponentFactory){
-        String applicationName = getApplicationName(inManifestFile);
-        if (applicationName != null && applicationName.endsWith(".ParallaxKiSettingKarwaDo")) {
-            int lastDot = applicationName.lastIndexOf('.');
-            if (lastDot > 0) {
-                newComponentFactory = applicationName.substring(0, lastDot + 1)
-                        + "ParallaxKoLadkiChahiye";
-            }
-        }
         ModificationProperty property = new ModificationProperty();
-        property.addApplicationAttribute(new AttributeItem("appComponentFactory",newComponentFactory));
+        property.addApplicationAttribute(new AttributeItem(
+                "appComponentFactory",
+                resolveAppComponentFactoryName(newComponentFactory)));
         FileProcesser.processManifestFile(inManifestFile, outManifestFile, property);
     }
 
