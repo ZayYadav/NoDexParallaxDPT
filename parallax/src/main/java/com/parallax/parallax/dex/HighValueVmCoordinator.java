@@ -28,6 +28,12 @@ public final class HighValueVmCoordinator {
     public static final int MAX_AUTO_SEMANTIC_OPS = 175000;
 
     /**
+     * Keep lifecycle/UI sidecars deliberately small. These are PVM4 integrity/control-flow gates,
+     * not replacements for Android callback bodies.
+     */
+    private static final int MAX_AUTO_ENTRY_GUARDS = 4;
+
+    /**
      * Automatic discovery must never rewrite platform/framework/runtime infrastructure merely
      * because a tiny helper happens to fit the scalar VM opcode subset. Those methods can be
      * bootstrap critical and are not application business logic.
@@ -92,8 +98,9 @@ public final class HighValueVmCoordinator {
     /**
      * Called from KeyUtils.generateKey(), which is the APK pipeline's main-thread choke point:
      * the package is already unzipped, while DEX gate injection/hollowing has not started yet.
-     * Manual mode is fail-closed. Auto mode probes methods first and only selects compiler-safe,
-     * application-owned methods, so unsupported/framework/runtime methods continue through DPT.
+     * Manual mode is fail-closed. Auto mode fully virtualizes only compiler-safe app-owned scalar
+     * methods and can additionally prepend a bounded PVM4 sidecar to a few app/login/main hot
+     * spots without replacing their Android callback bodies.
      */
     public static synchronized int prepareCurrentWorkspace(byte[] encKey) throws IOException {
         if (!isEnabled() || prepared) return 0;
@@ -116,12 +123,13 @@ public final class HighValueVmCoordinator {
         dexFiles.sort(Comparator.comparing(File::getName));
 
         List<HighValueVmTransformer.Rule> rules;
+        String autoPackageName = null;
         if (autoEnabled) {
-            rules = discoverAutoRules(workspace, dexFiles);
+            autoPackageName = getWorkspacePackageName(workspace);
+            rules = discoverAutoRules(dexFiles, autoPackageName);
             if (rules.isEmpty()) {
-                prepared = true;
-                LogUtils.info("High-value AUTO VM: no runtime-safe app-owned candidates; continuing with normal DPT only.");
-                return 0;
+                LogUtils.info(
+                        "High-value AUTO VM: no full-method app-owned scalar candidates; trying bounded PVM4 entry sidecars.");
             }
         } else {
             rules = HighValueVmTransformer.loadRules(rulesPath);
@@ -129,25 +137,51 @@ public final class HighValueVmCoordinator {
 
         List<HighValueVmTransformer.Program> programs = new ArrayList<>();
         int nextId = 1;
+        int fullMethodPrograms = 0;
+        int entryGuardPrograms = 0;
 
         for (File dex : dexFiles) {
-            File rewritten = new File(dex.getAbsolutePath() + ".pvm.dex");
-            try {
-                HighValueVmTransformer.Result result = HighValueVmTransformer.transform(
-                        dex, rewritten, rules, nextId, FIXED_VM_BRIDGE_SIG);
-                nextId = result.getNextMethodId();
-                programs.addAll(result.getPrograms());
-                if (programs.size() > MAX_VM_PROGRAMS) {
-                    throw new IOException("High-value VM program count exceeds native limit: "
-                            + programs.size());
-                }
-                if (!result.getPrograms().isEmpty()) {
-                    Files.move(rewritten.toPath(), dex.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                } else {
+            if (!rules.isEmpty()) {
+                File rewritten = new File(dex.getAbsolutePath() + ".pvm.dex");
+                try {
+                    HighValueVmTransformer.Result result = HighValueVmTransformer.transform(
+                            dex, rewritten, rules, nextId, FIXED_VM_BRIDGE_SIG);
+                    nextId = result.getNextMethodId();
+                    programs.addAll(result.getPrograms());
+                    fullMethodPrograms += result.getPrograms().size();
+                    verifyProgramLimit(programs.size());
+                    if (!result.getPrograms().isEmpty()) {
+                        Files.move(rewritten.toPath(), dex.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                    } else {
+                        Files.deleteIfExists(rewritten.toPath());
+                    }
+                } finally {
                     Files.deleteIfExists(rewritten.toPath());
                 }
-            } finally {
-                Files.deleteIfExists(rewritten.toPath());
+            }
+
+            if (autoEnabled && autoPackageName != null
+                    && entryGuardPrograms < MAX_AUTO_ENTRY_GUARDS
+                    && programs.size() < autoMaxPrograms) {
+                int remainingGuards = Math.min(
+                        MAX_AUTO_ENTRY_GUARDS - entryGuardPrograms,
+                        autoMaxPrograms - programs.size());
+                File guardedDex = new File(dex.getAbsolutePath() + ".pvm.guard.dex");
+                try {
+                    HighValueVmEntryGuardTransformer.Result guarded =
+                            HighValueVmEntryGuardTransformer.transform(
+                                    dex, guardedDex, nextId, FIXED_VM_BRIDGE_SIG,
+                                    autoPackageName, remainingGuards);
+                    nextId = guarded.getNextMethodId();
+                    programs.addAll(guarded.getPrograms());
+                    entryGuardPrograms += guarded.getGuarded();
+                    verifyProgramLimit(programs.size());
+                    if (guarded.getGuarded() > 0) {
+                        Files.move(guardedDex.toPath(), dex.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                    }
+                } finally {
+                    Files.deleteIfExists(guardedDex.toPath());
+                }
             }
         }
 
@@ -155,7 +189,8 @@ public final class HighValueVmCoordinator {
         if (programs.isEmpty()) {
             if (autoEnabled) {
                 prepared = true;
-                LogUtils.info("High-value AUTO VM selected no methods after verification; normal DPT remains active.");
+                LogUtils.info(
+                        "High-value AUTO VM selected no safe full methods or sidecars; normal DPT remains active.");
                 return 0;
             }
             throw new IOException("High-value VM was enabled but no methods were converted");
@@ -168,8 +203,29 @@ public final class HighValueVmCoordinator {
         File payload = new File(assets, "Parallax.vm");
         HighValueVmFourLayerCodec.writeEncryptedPayload(payload, programs, encKey);
         prepared = true;
-        LogUtils.info("High-value 4-layer VM prepared before DPT extraction: %d method(s)", programs.size());
+        LogUtils.info(
+                "High-value 4-layer VM prepared before DPT extraction: fullMethods=%d sidecarGuards=%d totalPrograms=%d",
+                fullMethodPrograms, entryGuardPrograms, programs.size());
         return programs.size();
+    }
+
+    private static void verifyProgramLimit(int count) throws IOException {
+        if (count > MAX_VM_PROGRAMS) {
+            throw new IOException("High-value VM program count exceeds native limit: " + count);
+        }
+    }
+
+    private static String getWorkspacePackageName(File workspace) {
+        File manifest = new File(workspace, "AndroidManifest.xml");
+        String packageName = manifest.isFile()
+                ? ApkManifestEditor.getPackageName(manifest.getAbsolutePath())
+                : null;
+        if (packageName == null || packageName.trim().isEmpty()) {
+            LogUtils.warn(
+                    "High-value AUTO VM: package name unavailable; automatic virtualization disabled for runtime safety.");
+            return null;
+        }
+        return packageName.trim();
     }
 
     /** Package-private for regression tests. */
@@ -188,17 +244,10 @@ public final class HighValueVmCoordinator {
     }
 
     private static List<HighValueVmTransformer.Rule> discoverAutoRules(
-            File workspace, List<File> dexFiles) throws IOException {
-        File manifest = new File(workspace, "AndroidManifest.xml");
-        String packageName = manifest.isFile()
-                ? ApkManifestEditor.getPackageName(manifest.getAbsolutePath())
-                : null;
-        if (packageName == null || packageName.trim().isEmpty()) {
-            LogUtils.warn("High-value AUTO VM: package name unavailable; automatic virtualization disabled for runtime safety.");
-            return new ArrayList<>();
-        }
+            List<File> dexFiles, String packageName) throws IOException {
+        if (packageName == null || packageName.isEmpty()) return new ArrayList<>();
 
-        String appDexPrefix = "L" + packageName.trim().replace('.', '/') + "/";
+        String appDexPrefix = "L" + packageName.replace('.', '/') + "/";
         LogUtils.info("High-value AUTO VM runtime-safe scope: %s", appDexPrefix);
 
         List<HighValueVmTransformer.Rule> rules = new ArrayList<>();
