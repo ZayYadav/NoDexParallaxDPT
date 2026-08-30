@@ -1,7 +1,9 @@
 #include <pthread.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -31,6 +33,59 @@ bool hasTracerPid() {
     return traced;
 }
 
+bool isProtectedDexMapping(const char *line) {
+    if (line == nullptr) {
+        return false;
+    }
+
+    // ART uses different labels across Android releases for ByteBuffer-backed DEX files.
+    // Restrict this to DEX-specific VMAs; never apply process-wide madvise to the Java heap.
+    static const char *dexMarkers[] = {
+            "Anonymous-DexFile",
+            "InMemoryDexFile",
+            "[anon:dalvik-classes",
+            "[anon:dalvik-dex"
+    };
+    for (const char *marker : dexMarkers) {
+        if (strstr(line, marker) != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void markMappingDontDump(const char *line) {
+#ifndef MADV_DONTDUMP
+    (void) line;
+#else
+    if (!isProtectedDexMapping(line)) {
+        return;
+    }
+
+#ifdef __LP64__
+    unsigned long long start = 0;
+    unsigned long long end = 0;
+    if (sscanf(line, "%llx-%llx", &start, &end) != 2 || end <= start) {
+        return;
+    }
+    const uintptr_t begin = static_cast<uintptr_t>(start);
+    const uintptr_t finish = static_cast<uintptr_t>(end);
+#else
+    unsigned long start = 0;
+    unsigned long end = 0;
+    if (sscanf(line, "%lx-%lx", &start, &end) != 2 || end <= start) {
+        return;
+    }
+    const uintptr_t begin = static_cast<uintptr_t>(start);
+    const uintptr_t finish = static_cast<uintptr_t>(end);
+#endif
+
+    // /proc/self/maps boundaries are page aligned. Failure is intentionally best-effort:
+    // some vendor kernels reject advice on special ART mappings, which must not break app start.
+    (void) madvise(reinterpret_cast<void *>(begin), finish - begin, MADV_DONTDUMP);
+#endif
+}
+
 bool hasRuntimeInstrumentationMarker() {
     FILE *fp = fopen("/proc/self/maps", "r");
     if (fp == nullptr) {
@@ -52,6 +107,10 @@ bool hasRuntimeInstrumentationMarker() {
     char line[1024] = {0};
     bool found = false;
     while (fgets(line, sizeof(line), fp) != nullptr) {
+        // Keep ART's protected anonymous/in-memory DEX VMAs out of ordinary dump paths.
+        // This complements, rather than replaces, PR_SET_DUMPABLE=0 and per-method wrapping.
+        markMappingDontDump(line);
+
         for (const char *marker : markers) {
             if (strstr(line, marker) != nullptr) {
                 found = true;
@@ -68,6 +127,11 @@ bool hasRuntimeInstrumentationMarker() {
 
 void lockProcessDumping() {
     (void) prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+#ifdef PR_SET_PTRACER
+    // Clear any Yama ptracer exception that may have been inherited/installed. This is
+    // additive to dumpable=0; a fully privileged/root observer still cannot be ruled out.
+    (void) prctl(PR_SET_PTRACER, 0, 0, 0, 0);
+#endif
     struct rlimit coreLimit = {0, 0};
     (void) setrlimit(RLIMIT_CORE, &coreLimit);
 }
