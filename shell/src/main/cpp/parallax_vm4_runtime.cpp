@@ -2,6 +2,10 @@
 
 // Compile PVM4 behind private names. parallax_vm_dispatch.cpp owns the stable public ABI
 // consumed by the JNI export bridge and selects the correct runtime from the method id.
+// parallax_vm4.cpp invokes its loader before the definition appears, so expose the private
+// renamed declaration before macro-including the implementation.
+void loadHighValueVm4(JNIEnv *env);
+
 #define loadHighValueVm loadHighValueVm4
 #define highValueVmI0 highValueVm4I0
 #define highValueVmI1 highValueVm4I1
