@@ -15,6 +15,10 @@ import com.parallax.parallax.BuildConfig;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.util.jar.JarFile;
+import java.util.jar.JarEntry;
+import java.security.cert.Certificate;
+import java.security.MessageDigest;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -56,6 +60,7 @@ public final class ParallaxKiSettingKarwaDo extends Application
     public static native Object ra(String appName);
     public static native void clinit();
     public static native int securityStatus(Context context);
+    public static native boolean vsd(String signerSha256);
     public static native void scheduleExit(int delayMs);
 
     static boolean isProtectionBlocked() {
@@ -103,6 +108,82 @@ public final class ParallaxKiSettingKarwaDo extends Application
         if (abi.startsWith("arm64")) return "arm64";
         if (abi.startsWith("armeabi")) return "arm";
         return abi;
+    }
+
+    private static String sourceArchiveSignerSha256(String sourceDir) {
+        String[] required = new String[] {
+                "AndroidManifest.xml",
+                "classes.dex",
+                "assets/ItsParallaxBaby"
+        };
+        String expectedDigest = null;
+        try (JarFile jar = new JarFile(sourceDir, true)) {
+            byte[] buffer = new byte[16384];
+            for (String name : required) {
+                JarEntry entry = jar.getJarEntry(name);
+                if (entry == null || entry.isDirectory()) {
+                    return null;
+                }
+                try (InputStream input = jar.getInputStream(entry)) {
+                    while (input.read(buffer) != -1) {
+                        // Reading the full signed entry forces JarVerifier validation.
+                    }
+                }
+                Certificate[] certificates = entry.getCertificates();
+                if (certificates == null || certificates.length == 0) {
+                    return null;
+                }
+                byte[] digest = MessageDigest.getInstance("SHA-256")
+                        .digest(certificates[0].getEncoded());
+                StringBuilder hex = new StringBuilder(64);
+                for (byte value : digest) {
+                    hex.append(String.format(java.util.Locale.US, "%02x", value & 0xff));
+                }
+                String current = hex.toString();
+                if (expectedDigest == null) {
+                    expectedDigest = current;
+                } else if (!expectedDigest.equals(current)) {
+                    return null;
+                }
+            }
+
+            // VM payloads are optional, but if present they must carry the same signer.
+            String[] optional = new String[] {
+                    "assets/Parallax.vm",
+                    "assets/Parallax.vm1"
+            };
+            for (String name : optional) {
+                JarEntry entry = jar.getJarEntry(name);
+                if (entry == null) {
+                    continue;
+                }
+                try (InputStream input = jar.getInputStream(entry)) {
+                    while (input.read(buffer) != -1) {
+                    }
+                }
+                Certificate[] certificates = entry.getCertificates();
+                if (certificates == null || certificates.length == 0) {
+                    return null;
+                }
+                byte[] digest = MessageDigest.getInstance("SHA-256")
+                        .digest(certificates[0].getEncoded());
+                StringBuilder hex = new StringBuilder(64);
+                for (byte value : digest) {
+                    hex.append(String.format(java.util.Locale.US, "%02x", value & 0xff));
+                }
+                if (!hex.toString().equals(expectedDigest)) {
+                    return null;
+                }
+            }
+            return expectedDigest;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static boolean verifySourceArchiveSigner(String sourceDir) {
+        String digest = sourceArchiveSignerSha256(sourceDir);
+        return digest != null && vsd(digest);
     }
 
     private static File extractShellLibrary(String sourceDir, String dataDir) {
@@ -190,6 +271,10 @@ public final class ParallaxKiSettingKarwaDo extends Application
 
             applicationPackageName = info.packageName;
             loadShellLibrary(info.sourceDir, info.dataDir);
+            if (!verifySourceArchiveSigner(info.sourceDir)) {
+                securityReason |= SECURITY_PAYLOAD_TAMPER;
+                return false;
+            }
 
             // No Context exists yet in AppComponentFactory.instantiateClassLoader(). The
             // native check still validates the payload, root, tracer and hook state; the
@@ -229,6 +314,11 @@ public final class ParallaxKiSettingKarwaDo extends Application
                     info = base.getApplicationInfo();
                     if (info == null) throw new IllegalStateException("application info is null");
                     loadShellLibrary(info.sourceDir, info.dataDir);
+                    if (!verifySourceArchiveSigner(info.sourceDir)) {
+                        securityReason |= SECURITY_PAYLOAD_TAMPER;
+                        state = nextState(0x66, 0x76);
+                        break;
+                    }
                     shellLibrary = new File(info.dataDir, "files/" + SHELL_SO_NAME);
                     state = nextState(0x33, 0x73);
                     break;
