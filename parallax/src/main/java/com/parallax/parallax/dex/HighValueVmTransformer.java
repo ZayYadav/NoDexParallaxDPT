@@ -220,10 +220,6 @@ public final class HighValueVmTransformer {
 
     public static void writeEncryptedPayload(File output, List<Program> programs, byte[] encKey)
             throws IOException {
-        String buildKey = Parallax.getBuildKey();
-        if (buildKey == null || buildKey.isEmpty()) {
-            throw new IOException("Parallax build key is missing; cannot seal high-value VM payload");
-        }
         byte[] raw = serialize(programs);
         byte[] payloadKey = CryptoUtils.hmacSha256(encKey, KEY_LABEL);
         byte[] nonce = new byte[NONCE_SIZE];
