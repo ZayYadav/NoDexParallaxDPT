@@ -470,16 +470,28 @@ PARALLAX_ENCRYPT jobject replaceApplicationOnLoadedApk(JNIEnv *env, jclass __unu
 
 PARALLAX_ENCRYPT static bool registerNativeMethods(JNIEnv *env) {
     jclass JniBridgeClass = env->FindClass(g_shell_config.jni_class_name.c_str());
-    if (JniBridgeClass == nullptr || env->ExceptionCheck()) {
+    if (env->ExceptionCheck()) {
         env->ExceptionClear();
         reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
         return JNI_FALSE;
     }
-    if (env->RegisterNatives(JniBridgeClass, gMethods, sizeof(gMethods) / sizeof(gMethods[0])) ==
-        0) {
-        return JNI_TRUE;
+    if (JniBridgeClass == nullptr) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return JNI_FALSE;
     }
-    return JNI_FALSE;
+
+    const jint result = env->RegisterNatives(
+            JniBridgeClass, gMethods, sizeof(gMethods) / sizeof(gMethods[0]));
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return JNI_FALSE;
+    }
+    if (result != 0) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
 }
 
 
