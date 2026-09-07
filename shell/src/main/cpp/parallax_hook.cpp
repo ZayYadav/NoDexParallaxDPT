@@ -182,20 +182,21 @@ void patchMethod(uint8_t *begin,
         return;
     }
 
-    std::lock_guard<std::mutex> writeLock(g_dex_mem_mutex);
-    if (UNLIKELY(!setDexProtection(begin, dexSize, PROT_READ | PROT_WRITE))) {
-        DLOGW("cannot make protected dex writable: dex=%d", dexIndex);
-        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
-        return;
-    }
-
     auto *dexCodeItem = reinterpret_cast<dex::CodeItem *>(begin + codeOff);
     auto *realInsnsPtr = reinterpret_cast<uint8_t *>(dexCodeItem->insns_);
     const size_t realOffset = static_cast<size_t>(realInsnsPtr - begin);
     const uint32_t restoreSize = codeItem->getInsnsSize();
-    if (UNLIKELY(realOffset > dexSize || restoreSize > dexSize - realOffset)) {
+    if (UNLIKELY(realOffset > dexSize || restoreSize == 0
+            || restoreSize > dexSize - realOffset)) {
         DLOGW("instruction restore out of range: dex=%d method=%u off=%zu bytes=%u size=%u",
               dexIndex, methodIdx, realOffset, restoreSize, dexSize);
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return;
+    }
+
+    std::lock_guard<std::mutex> writeLock(g_dex_mem_mutex);
+    if (UNLIKELY(!setDexProtection(begin, dexSize, PROT_READ | PROT_WRITE))) {
+        DLOGW("cannot make protected dex writable: dex=%d", dexIndex);
         reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
         return;
     }
