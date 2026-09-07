@@ -18,7 +18,6 @@
 
 
 namespace {
-constexpr uint8_t CODE_ITEM_MAGIC_V2[] = {'P', 'C', 'I', '2'};
 constexpr uint8_t CODE_ITEM_MAGIC_V3[] = {'P', 'C', 'I', '3'};
 constexpr size_t CODE_ITEM_MAGIC_SIZE = sizeof(CODE_ITEM_MAGIC_V3);
 constexpr size_t CODE_ITEM_LENGTH_SIZE = 4;
@@ -34,20 +33,10 @@ bool hasMagic(const uint8_t *buffer, size_t size, const uint8_t magic[CODE_ITEM_
            && memcmp(buffer, magic, CODE_ITEM_MAGIC_SIZE) == 0;
 }
 
-bool isLegacySealedCodeItem(const uint8_t *buffer, size_t size) {
-    return size > CODE_ITEM_MAGIC_SIZE + CODE_ITEM_NONCE_SIZE + CODE_ITEM_GCM_TAG_SIZE
-           && hasMagic(buffer, size, CODE_ITEM_MAGIC_V2);
-}
-
 bool isCompressedSealedCodeItem(const uint8_t *buffer, size_t size) {
     return size > CODE_ITEM_MAGIC_SIZE + CODE_ITEM_LENGTH_SIZE
                   + CODE_ITEM_NONCE_SIZE + CODE_ITEM_GCM_TAG_SIZE
            && hasMagic(buffer, size, CODE_ITEM_MAGIC_V3);
-}
-
-bool isSealedCodeItem(const uint8_t *buffer, size_t size) {
-    return isCompressedSealedCodeItem(buffer, size)
-           || isLegacySealedCodeItem(buffer, size);
 }
 
 uint32_t readBigEndianU32(const uint8_t *data) {
