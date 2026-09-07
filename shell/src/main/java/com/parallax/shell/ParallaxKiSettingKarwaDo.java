@@ -231,7 +231,7 @@ public final class ParallaxKiSettingKarwaDo extends Application
         } finally {
             if (temp.exists()) {
                 try {
-                    android.system.Os.unlink(temp.getAbsolutePath());
+                    android.system.Os.remove(temp.getAbsolutePath());
                 } catch (Exception ignored) {
                 }
             }
@@ -246,7 +246,7 @@ public final class ParallaxKiSettingKarwaDo extends Application
             // The dynamic linker has mapped the library by the time System.load returns.
             // Remove the reusable on-disk copy; mappings stay valid for this process.
             try {
-                android.system.Os.unlink(shellLibrary.getAbsolutePath());
+                android.system.Os.remove(shellLibrary.getAbsolutePath());
             } catch (Exception e) {
                 throw new IllegalStateException("cannot unlink loaded shell library", e);
             }
