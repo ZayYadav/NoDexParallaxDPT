@@ -13,6 +13,14 @@
 #include <mbedtls/md.h>
 #include "common/parallax_log.h"
 
+struct ParallaxCryptoMetadata {
+    uint8_t master_key[16];
+    uint8_t bitcode_nonce[16];
+    uint8_t bitcode_tag[32];
+};
+
+extern ParallaxCryptoMetadata g_parallax_crypto_meta;
+
 std::vector<uint8_t> hmac_sha256(const uint8_t *key,
                                  size_t key_len,
                                  const uint8_t *input,
