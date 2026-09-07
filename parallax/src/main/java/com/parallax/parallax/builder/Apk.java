@@ -5,7 +5,6 @@ import com.parallax.parallax.Parallax;
 import com.parallax.parallax.config.Const;
 import com.parallax.parallax.config.ShellConfig;
 import com.parallax.parallax.res.ApkManifestEditor;
-import com.parallax.parallax.util.CryptoUtils;
 import com.parallax.parallax.util.FileUtils;
 import com.parallax.parallax.util.KeyUtils;
 import com.parallax.parallax.util.LogUtils;
@@ -15,44 +14,19 @@ import com.wind.meditor.property.AttributeItem;
 import com.wind.meditor.property.ModificationProperty;
 import com.wind.meditor.utils.NodeValue;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
-import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
-import java.util.zip.Deflater;
-import java.util.zip.DeflaterOutputStream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipFile;
-import java.util.zip.ZipOutputStream;
 
 public class Apk extends AndroidPackage {
-
-    private static final String DEX_AUTH_COMMENT_PREFIX = "PXH1:";
-    private static final String DEX_AUTH_LABEL = "Parallax/dex/authentication/v1";
-    private static final int DEX_AUTH_TAG_HEX_LENGTH = 64;
-
-    // PCI3: original method bodies are compressed before encryption. Ciphertext itself is
-    // incompressible, so this ordering gives a meaningful APK-size reduction without
-    // weakening the AES-GCM authenticated vault.
-    private static final byte[] CODE_ITEM_MAGIC = new byte[] {'P', 'C', 'I', '3'};
-    private static final String CODE_ITEM_KEY_LABEL = "Parallax/codeitem/encryption/v3/";
-    private static final String CODE_ITEM_AAD_PREFIX = "Parallax/codeitem/payload/v3/";
-    private static final int CODE_ITEM_LENGTH_SIZE = 4;
-    private static final int CODE_ITEM_NONCE_SIZE = 12;
-    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     public static class Builder extends AndroidPackage.Builder {
         @Override
@@ -138,8 +112,7 @@ public class Apk extends AndroidPackage {
         ApkManifestEditor.writeApplicationName(inManifestPath, outManifestPath, getProxyApplicationName());
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
@@ -149,8 +122,7 @@ public class Apk extends AndroidPackage {
         ApkManifestEditor.writeAppComponentFactory(inManifestPath, outManifestPath, getProxyComponentFactory());
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
@@ -162,8 +134,7 @@ public class Apk extends AndroidPackage {
         FileProcesser.processManifestFile(inManifestPath, outManifestPath, property);
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
@@ -173,8 +144,7 @@ public class Apk extends AndroidPackage {
         ApkManifestEditor.writeDebuggable(inManifestPath, outManifestPath, debuggable ? "true" : "false");
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
@@ -196,167 +166,6 @@ public class Apk extends AndroidPackage {
         shellConfig.setAppComponentFactoryName(acfName);
     }
 
-    private static String toHex(byte[] data) {
-        final char[] alphabet = "0123456789abcdef".toCharArray();
-        char[] out = new char[data.length * 2];
-        for (int i = 0; i < data.length; i++) {
-            int value = data[i] & 0xff;
-            out[i * 2] = alphabet[value >>> 4];
-            out[i * 2 + 1] = alphabet[value & 0x0f];
-        }
-        return new String(out);
-    }
-
-    private static void authenticateCompactDexZip(File compact, byte[] encKey,
-                                                   String placeholderComment) throws IOException {
-        byte[] zipBytes = Files.readAllBytes(compact.toPath());
-        byte[] placeholderBytes = placeholderComment.getBytes(StandardCharsets.US_ASCII);
-        int eocdOffset = zipBytes.length - placeholderBytes.length - 22;
-        if (eocdOffset < 0
-                || (zipBytes[eocdOffset] & 0xff) != 0x50
-                || (zipBytes[eocdOffset + 1] & 0xff) != 0x4b
-                || (zipBytes[eocdOffset + 2] & 0xff) != 0x05
-                || (zipBytes[eocdOffset + 3] & 0xff) != 0x06) {
-            throw new IOException("Cannot locate protected DEX ZIP EOCD");
-        }
-
-        int commentLength = (zipBytes[eocdOffset + 20] & 0xff)
-                | ((zipBytes[eocdOffset + 21] & 0xff) << 8);
-        if (commentLength != placeholderBytes.length
-                || eocdOffset + 22 + commentLength != zipBytes.length) {
-            throw new IOException("Invalid protected DEX ZIP comment layout");
-        }
-
-        byte[] authenticationKey = CryptoUtils.hmacSha256(encKey, DEX_AUTH_LABEL);
-        byte[] authenticatedPrefix = Arrays.copyOf(zipBytes, eocdOffset + 20);
-        byte[] tag = CryptoUtils.hmacSha256(authenticationKey, authenticatedPrefix);
-        String finalComment = DEX_AUTH_COMMENT_PREFIX + toHex(tag);
-        byte[] finalCommentBytes = finalComment.getBytes(StandardCharsets.US_ASCII);
-        if (finalCommentBytes.length != placeholderBytes.length) {
-            throw new IOException("Invalid protected DEX authentication tag length");
-        }
-
-        System.arraycopy(finalCommentBytes, 0, zipBytes, eocdOffset + 22, finalCommentBytes.length);
-        Files.write(compact.toPath(), zipBytes);
-    }
-
-    private static byte[] compressCodeItemPayload(byte[] plaintext) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.max(256, plaintext.length / 2));
-        Deflater deflater = new Deflater(Deflater.BEST_COMPRESSION);
-        try (DeflaterOutputStream stream = new DeflaterOutputStream(output, deflater, 32768)) {
-            stream.write(plaintext);
-            stream.finish();
-        } finally {
-            deflater.end();
-        }
-        return output.toByteArray();
-    }
-
-    private static void writeBigEndianInt(byte[] target, int offset, int value) {
-        target[offset] = (byte) ((value >>> 24) & 0xff);
-        target[offset + 1] = (byte) ((value >>> 16) & 0xff);
-        target[offset + 2] = (byte) ((value >>> 8) & 0xff);
-        target[offset + 3] = (byte) (value & 0xff);
-    }
-
-    private static void sealCodeItemPayload(Apk apk, String packageDir, byte[] encKey) throws IOException {
-        File codeItemFile = new File(apk.getOutAssetsDir(packageDir), Const.KEY_CODE_ITEM_STORE_NAME);
-        if (!codeItemFile.isFile()) {
-            throw new IOException("Protected code-item payload is missing: " + codeItemFile);
-        }
-
-        String buildKey = Parallax.getBuildKey();
-        if (buildKey == null || buildKey.isEmpty()) {
-            throw new IOException("Parallax build key is missing; cannot seal code-item payload");
-        }
-
-        byte[] plaintext = Files.readAllBytes(codeItemFile.toPath());
-        if (plaintext.length < 4) {
-            throw new IOException("Protected code-item payload is empty or malformed");
-        }
-        byte[] compressed = compressCodeItemPayload(plaintext);
-        byte[] payloadKey = CryptoUtils.hmacSha256(encKey, CODE_ITEM_KEY_LABEL + buildKey);
-        byte[] nonce = new byte[CODE_ITEM_NONCE_SIZE];
-        SECURE_RANDOM.nextBytes(nonce);
-        byte[] aad = (CODE_ITEM_AAD_PREFIX + plaintext.length)
-                .getBytes(StandardCharsets.US_ASCII);
-        byte[] ciphertext = CryptoUtils.aesGcmEncrypt(payloadKey, nonce, aad, compressed);
-
-        byte[] envelope = new byte[CODE_ITEM_MAGIC.length
-                + CODE_ITEM_LENGTH_SIZE
-                + nonce.length
-                + ciphertext.length];
-        int cursor = 0;
-        System.arraycopy(CODE_ITEM_MAGIC, 0, envelope, cursor, CODE_ITEM_MAGIC.length);
-        cursor += CODE_ITEM_MAGIC.length;
-        writeBigEndianInt(envelope, cursor, plaintext.length);
-        cursor += CODE_ITEM_LENGTH_SIZE;
-        System.arraycopy(nonce, 0, envelope, cursor, nonce.length);
-        cursor += nonce.length;
-        System.arraycopy(ciphertext, 0, envelope, cursor, ciphertext.length);
-
-        Files.write(codeItemFile.toPath(), envelope);
-        int originalSize = plaintext.length;
-        int compressedSize = compressed.length;
-        Arrays.fill(plaintext, (byte) 0);
-        Arrays.fill(compressed, (byte) 0);
-        Arrays.fill(payloadKey, (byte) 0);
-        Arrays.fill(aad, (byte) 0);
-        LogUtils.info("Protected method-body vault compressed + AES-256-GCM sealed: %d -> %d -> %d bytes",
-                originalSize, compressedSize, envelope.length);
-    }
-
-    /**
-     * Re-encode the hollowed protected DEX archive with BEST_COMPRESSION and a keyed
-     * HMAC-SHA256 ZIP comment before it is appended behind the one-class bootstrap DEX.
-     * The native policy verifies the tag before ia()/DEX restoration is allowed to run.
-     * combineDexZipWithShellDex() then adds the single outer length trailer consumed by
-     * the native loader.
-     */
-    private static void compactDexPayload(Apk apk, String packageDir, byte[] encKey) throws IOException {
-        File payload = new File(apk.getOutAssetsDir(packageDir), Const.KEY_DEXES_STORE_NAME);
-        if (!payload.isFile()) {
-            throw new IOException("Protected DEX payload is missing: " + payload);
-        }
-
-        String placeholderComment = DEX_AUTH_COMMENT_PREFIX + "0".repeat(DEX_AUTH_TAG_HEX_LENGTH);
-        File compact = new File(payload.getParentFile(), payload.getName() + ".compact");
-        try (ZipFile sourceZip = new ZipFile(payload);
-             ZipOutputStream output = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(compact)))) {
-            output.setLevel(Deflater.BEST_COMPRESSION);
-            output.setComment(placeholderComment);
-            Enumeration<? extends ZipEntry> entries = sourceZip.entries();
-            byte[] buffer = new byte[32768];
-            while (entries.hasMoreElements()) {
-                ZipEntry sourceEntry = entries.nextElement();
-                if (sourceEntry.isDirectory()) {
-                    continue;
-                }
-                ZipEntry targetEntry = new ZipEntry(sourceEntry.getName());
-                output.putNextEntry(targetEntry);
-                try (InputStream input = new BufferedInputStream(sourceZip.getInputStream(sourceEntry))) {
-                    int read;
-                    while ((read = input.read(buffer)) != -1) {
-                        output.write(buffer, 0, read);
-                    }
-                }
-                output.closeEntry();
-            }
-        }
-
-        long compactSize = compact.length();
-        if (compactSize <= 0 || compactSize > Integer.MAX_VALUE) {
-            compact.delete();
-            throw new IOException("Invalid protected DEX payload size: " + compactSize);
-        }
-
-        authenticateCompactDexZip(compact, encKey, placeholderComment);
-
-        long oldSize = payload.length();
-        Files.move(compact.toPath(), payload.toPath(), StandardCopyOption.REPLACE_EXISTING);
-        LogUtils.info("DEX payload compacted/authenticated before append: %d -> %d bytes",
-                oldSize, payload.length());
-    }
 
     /**
      * Shell artifacts are built for four ABIs, but a protected APK usually ships only one
@@ -399,27 +208,6 @@ public class Apk extends AndroidPackage {
         }
     }
 
-    /**
-     * Zero-DEX APKs are already native-only packages. Injecting the Java shell into such
-     * an APK would turn it into a DEX package and can also break a NativeActivity-style
-     * lifecycle. Preserve the original manifest, native libraries and resources and only
-     * run the package finalization pipeline (optional debug flag, zipalign and signing).
-     *
-     * This mode deliberately does not pretend to apply DEX hollowing: there is no DEX
-     * payload to transform. The important invariant is that a zero-DEX input stays
-     * zero-DEX in the output.
-     */
-    private static void processZeroDexApk(Apk apk, File apkFile, String apkMainProcessPath) {
-        LogUtils.info("Native-only APK detected: no classes*.dex found.");
-        LogUtils.info("Zero-DEX mode: preserving manifest/components/libs; shell DEX injection is skipped.");
-
-        if (apk.isDebuggable()) {
-            LogUtils.info("Make zero-DEX apk debuggable.");
-            apk.setDebuggable(apkMainProcessPath, true);
-        }
-
-        apk.buildPackage(apkFile.getAbsolutePath(), apkMainProcessPath, FileUtils.getUserDir());
-    }
 
     private static void process(Apk apk) {
         File apkFile = new File(apk.getFilePath());
@@ -435,16 +223,13 @@ public class Apk extends AndroidPackage {
         // shell manifest rewrite, shell library copy, encrypted config write or stub DEX
         // generation.
         if (apk.getDexFiles(apk.getDexDir(apkMainProcessPath)).isEmpty()) {
-            try {
-                processZeroDexApk(apk, apkFile, apkMainProcessPath);
-            } finally {
-                File workspace = new File(apkMainProcessPath);
-                if (workspace.exists()) {
-                    FileUtils.deleteRecurse(workspace);
-                }
+            File workspace = new File(apkMainProcessPath);
+            if (workspace.exists()) {
+                FileUtils.deleteRecurse(workspace);
             }
-            LogUtils.info("All done (zero-DEX mode).");
-            return;
+            throw new IllegalStateException(
+                    "Ultra protection refuses zero-DEX/native-only APKs because the DEX shell "
+                            + "and method-vault guarantees cannot be applied.");
         }
 
         byte[] encKey = KeyUtils.generateKey();
@@ -464,10 +249,10 @@ public class Apk extends AndroidPackage {
 
             String assetsPath = apk.getOutAssetsDir(apkMainProcessPath).getAbsolutePath();
             apk.extractDexCode(apkMainProcessPath, assetsPath);
-            sealCodeItemPayload(apk, apkMainProcessPath, encKey);
+            PayloadSealer.sealCodeItemPayload(apk, apkMainProcessPath, encKey);
             apk.addJunkCodeDex(apkMainProcessPath);
             apk.compressDexFiles(apkMainProcessPath);
-            compactDexPayload(apk, apkMainProcessPath, encKey);
+            PayloadSealer.compactAndAuthenticateDexPayload(apk, apkMainProcessPath, encKey);
             apk.deleteAllDexFiles(apkMainProcessPath);
             apk.combineDexZipWithShellDex(apkMainProcessPath);
             apk.addKeepDexes(apkMainProcessPath);
@@ -482,6 +267,7 @@ public class Apk extends AndroidPackage {
         } catch (Exception e) {
             throw new IllegalStateException("APK protection failed", e);
         } finally {
+            Arrays.fill(encKey, (byte) 0);
             File apkMainProcessFile = new File(apkMainProcessPath);
             if (apkMainProcessFile.exists()) {
                 FileUtils.deleteRecurse(apkMainProcessFile);

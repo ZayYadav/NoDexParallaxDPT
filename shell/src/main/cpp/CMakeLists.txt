@@ -17,7 +17,6 @@ set(PARALLAX_NATIVE_SOURCE
         parallax_vm4_runtime.cpp
         parallax_vm_dispatch.cpp
         parallax_vm_exports.cpp
-        rc4/rc4.c
         common/parallax_string.c
         dex/dex_file.cpp
         dex/MultiDexCode.cpp
@@ -92,16 +91,12 @@ else()
     message("release hardening: hidden visibility, stack protector, FORTIFY, RELRO/NOW, NX stack, section GC")
 endif()
 
-message("so name: ${SO_NAME}")
-
-if(NOT DEFINED PARALLAX_BUILD_KEY OR PARALLAX_BUILD_KEY STREQUAL "")
-    message(FATAL_ERROR "PARALLAX_BUILD_KEY is required")
+if(NOT DEFINED SO_NAME OR SO_NAME STREQUAL "")
+    message(FATAL_ERROR "SO_NAME is required")
 endif()
-# Never print PARALLAX_BUILD_KEY: it is intentionally kept out of CI logs.
+message("so name configured")
+add_compile_definitions(SO_NAME="${SO_NAME}")
 
-add_compile_definitions(JNI_BRIDGE_NAME="${JNI_BRIDGE_NAME}")
-add_compile_definitions(SO_NAME="${SO_NAME}.so")
-add_compile_definitions(PARALLAX_BUILD_KEY="${PARALLAX_BUILD_KEY}")
 
 include_directories(./ )
 include_directories(./common)

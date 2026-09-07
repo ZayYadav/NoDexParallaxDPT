@@ -15,6 +15,10 @@ import com.parallax.parallax.BuildConfig;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.util.jar.JarFile;
+import java.util.jar.JarEntry;
+import java.security.cert.Certificate;
+import java.security.MessageDigest;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -29,6 +33,7 @@ public final class ParallaxKiSettingKarwaDo extends Application
     private static final int SECURITY_RUNTIME_TAMPER = 1 << 5;
     private static final String ZIP_LIB_DIR = "ParallaxLoveU";
     private static final String SHELL_SO_NAME = BuildConfig.SO_NAME;
+    private static final long MAX_SHELL_LIBRARY_BYTES = 64L * 1024L * 1024L;
     private static final Object BOOTSTRAP_LOCK = new Object();
 
     private static volatile int flowNoise = 0x6D2B79F5;
@@ -55,6 +60,7 @@ public final class ParallaxKiSettingKarwaDo extends Application
     public static native Object ra(String appName);
     public static native void clinit();
     public static native int securityStatus(Context context);
+    public static native boolean vsd(String signerSha256);
     public static native void scheduleExit(int delayMs);
 
     static boolean isProtectionBlocked() {
@@ -104,40 +110,146 @@ public final class ParallaxKiSettingKarwaDo extends Application
         return abi;
     }
 
+    private static String sourceArchiveSignerSha256(String sourceDir) {
+        String[] required = new String[] {
+                "AndroidManifest.xml",
+                "classes.dex",
+                "assets/ItsParallaxBaby",
+                "assets/Parallax.love",
+                "assets/" + ZIP_LIB_DIR + "/" + abiDirName() + "/" + SHELL_SO_NAME
+        };
+        String expectedDigest = null;
+        try (JarFile jar = new JarFile(sourceDir, true)) {
+            byte[] buffer = new byte[16384];
+            for (String name : required) {
+                JarEntry entry = jar.getJarEntry(name);
+                if (entry == null || entry.isDirectory()) {
+                    return null;
+                }
+                try (InputStream input = jar.getInputStream(entry)) {
+                    while (input.read(buffer) != -1) {
+                        // Reading the full signed entry forces JarVerifier validation.
+                    }
+                }
+                Certificate[] certificates = entry.getCertificates();
+                if (certificates == null || certificates.length == 0) {
+                    return null;
+                }
+                byte[] digest = MessageDigest.getInstance("SHA-256")
+                        .digest(certificates[0].getEncoded());
+                StringBuilder hex = new StringBuilder(64);
+                for (byte value : digest) {
+                    hex.append(String.format(java.util.Locale.US, "%02x", value & 0xff));
+                }
+                String current = hex.toString();
+                if (expectedDigest == null) {
+                    expectedDigest = current;
+                } else if (!expectedDigest.equals(current)) {
+                    return null;
+                }
+            }
+
+            // VM payloads are optional, but if present they must carry the same signer.
+            String[] optional = new String[] {
+                    "assets/Parallax.vm",
+                    "assets/Parallax.vm1"
+            };
+            for (String name : optional) {
+                JarEntry entry = jar.getJarEntry(name);
+                if (entry == null) {
+                    continue;
+                }
+                try (InputStream input = jar.getInputStream(entry)) {
+                    while (input.read(buffer) != -1) {
+                    }
+                }
+                Certificate[] certificates = entry.getCertificates();
+                if (certificates == null || certificates.length == 0) {
+                    return null;
+                }
+                byte[] digest = MessageDigest.getInstance("SHA-256")
+                        .digest(certificates[0].getEncoded());
+                StringBuilder hex = new StringBuilder(64);
+                for (byte value : digest) {
+                    hex.append(String.format(java.util.Locale.US, "%02x", value & 0xff));
+                }
+                if (!hex.toString().equals(expectedDigest)) {
+                    return null;
+                }
+            }
+            return expectedDigest;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private static File extractShellLibrary(String sourceDir, String dataDir) {
         File outDir = new File(dataDir, "files");
-        if (!outDir.exists() && !outDir.mkdirs()) {
+        if (!outDir.exists() && !outDir.mkdirs() && !outDir.isDirectory()) {
             throw new IllegalStateException("cannot create shell directory");
         }
         File out = new File(outDir, SHELL_SO_NAME);
         File temp = new File(outDir, "." + SHELL_SO_NAME + "."
                 + android.os.Process.myPid() + "." + Thread.currentThread().getId() + ".tmp");
         String entryName = "assets/" + ZIP_LIB_DIR + "/" + abiDirName() + "/" + SHELL_SO_NAME;
+
         try (ZipFile zip = new ZipFile(sourceDir)) {
             ZipEntry entry = zip.getEntry(entryName);
-            if (entry == null) {
+            if (entry == null || entry.isDirectory()) {
                 throw new IllegalStateException("missing shell library for process ABI: " + abiDirName());
             }
+            long expected = entry.getSize();
+            if (expected <= 0 || expected > MAX_SHELL_LIBRARY_BYTES) {
+                throw new IllegalStateException("invalid shell library size");
+            }
+
+            long written = 0;
             try (InputStream in = zip.getInputStream(entry);
                  FileOutputStream output = new FileOutputStream(temp, false)) {
                 byte[] buffer = new byte[16384];
                 int read;
                 while ((read = in.read(buffer)) != -1) {
+                    written += read;
+                    if (written > expected || written > MAX_SHELL_LIBRARY_BYTES) {
+                        throw new IllegalStateException("shell library extraction exceeded declared size");
+                    }
                     output.write(buffer, 0, read);
                 }
                 output.flush();
                 output.getFD().sync();
             }
-            // Same-directory rename is atomic on Android/Linux. This avoids one process
-            // observing a partially-written library while another process is starting.
-            if (!temp.renameTo(out)) {
-                throw new IllegalStateException("cannot publish shell library atomically");
+            if (written != expected || temp.length() != expected) {
+                throw new IllegalStateException("shell library extraction size mismatch");
             }
+
+            android.system.Os.chmod(temp.getAbsolutePath(), 0400);
+            android.system.Os.rename(temp.getAbsolutePath(), out.getAbsolutePath());
+            android.system.Os.chmod(out.getAbsolutePath(), 0400);
             return out;
         } catch (Exception e) {
             throw new IllegalStateException("cannot extract shell library", e);
         } finally {
-            if (temp.exists()) temp.delete();
+            if (temp.exists()) {
+                try {
+                    android.system.Os.remove(temp.getAbsolutePath());
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    private static void loadShellLibrary(String sourceDir, String dataDir) {
+        File shellLibrary = extractShellLibrary(sourceDir, dataDir);
+        try {
+            System.load(shellLibrary.getAbsolutePath());
+        } finally {
+            // The dynamic linker has mapped the library by the time System.load returns.
+            // Remove the reusable on-disk copy; mappings stay valid for this process.
+            try {
+                android.system.Os.remove(shellLibrary.getAbsolutePath());
+            } catch (Exception e) {
+                throw new IllegalStateException("cannot unlink loaded shell library", e);
+            }
         }
     }
 
@@ -155,8 +267,16 @@ public final class ParallaxKiSettingKarwaDo extends Application
             if (classLoaderReady) return true;
 
             applicationPackageName = info.packageName;
-            File shellLibrary = extractShellLibrary(info.sourceDir, info.dataDir);
-            System.load(shellLibrary.getAbsolutePath());
+            String sourceSigner = sourceArchiveSignerSha256(info.sourceDir);
+            if (sourceSigner == null) {
+                securityReason |= SECURITY_PAYLOAD_TAMPER;
+                return false;
+            }
+            loadShellLibrary(info.sourceDir, info.dataDir);
+            if (!vsd(sourceSigner)) {
+                securityReason |= SECURITY_PAYLOAD_TAMPER;
+                return false;
+            }
 
             // No Context exists yet in AppComponentFactory.instantiateClassLoader(). The
             // native check still validates the payload, root, tracer and hook state; the
@@ -165,7 +285,13 @@ public final class ParallaxKiSettingKarwaDo extends Application
             if (securityReason != 0) return false;
 
             ia();
+            securityReason |= securityStatus(null);
+            if (securityReason != 0) return false;
+
             cbde(classLoader);
+            securityReason |= securityStatus(null);
+            if (securityReason != 0) return false;
+
             realApplicationName = rapn();
             realComponentFactoryName = rcf();
             classLoaderReady = true;
@@ -189,19 +315,38 @@ public final class ParallaxKiSettingKarwaDo extends Application
                 case 0x22:
                     info = base.getApplicationInfo();
                     if (info == null) throw new IllegalStateException("application info is null");
-                    shellLibrary = extractShellLibrary(info.sourceDir, info.dataDir);
-                    System.load(shellLibrary.getAbsolutePath());
+                    String sourceSigner = sourceArchiveSignerSha256(info.sourceDir);
+                    if (sourceSigner == null) {
+                        securityReason |= SECURITY_PAYLOAD_TAMPER;
+                        state = nextState(0x66, 0x76);
+                        break;
+                    }
+                    loadShellLibrary(info.sourceDir, info.dataDir);
+                    if (!vsd(sourceSigner)) {
+                        securityReason |= SECURITY_PAYLOAD_TAMPER;
+                        state = nextState(0x66, 0x76);
+                        break;
+                    }
+                    shellLibrary = new File(info.dataDir, "files/" + SHELL_SO_NAME);
                     state = nextState(0x33, 0x73);
                     break;
                 case 0x33:
                     securityReason = securityStatus(base);
+                    if (securityReason == 0) {
+                        ia();
+                        securityReason |= securityStatus(base);
+                    }
                     state = securityReason != 0 ? nextState(0x66, 0x76) : nextState(0x44, 0x74);
-                    if (securityReason == 0) ia();
                     break;
                 case 0x44:
                     cbde(base.getClassLoader());
-                    classLoaderReady = true;
-                    state = nextState(0x55, 0x75);
+                    securityReason |= securityStatus(base);
+                    if (securityReason == 0) {
+                        classLoaderReady = true;
+                        state = nextState(0x55, 0x75);
+                    } else {
+                        state = nextState(0x66, 0x76);
+                    }
                     break;
                 case 0x55:
                     realApplicationName = rapn();

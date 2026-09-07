@@ -7,7 +7,8 @@
 #include <atomic>
 #include <cstring>
 #include <mutex>
-#include <random>
+#include <fcntl.h>
+#include <cstdlib>
 #include <unistd.h>
 #include <sys/mman.h>
 #include <vector>
@@ -15,7 +16,6 @@
 #include "parallax_crypto.h"
 #include "parallax_risk.h"
 
-extern uint8_t PARALLAX_UNKNOWN_DATA[];
 
 namespace {
 std::once_flag g_runtime_key_once;
@@ -40,38 +40,58 @@ void hardenRuntimeKeyMemory() {
     (void) mlock(page, pageSize);
 }
 
-void initRuntimeKey() {
-    // Mix fresh process entropy through the already build-bound native secret. This key
-    // never exists in the APK and changes on every process start, so a snapshot of the
-    // persistent code-item vault contains only runtime-wrapped instruction bytes.
-    std::array<uint8_t, 48> seed{};
-    std::random_device random;
-    for (size_t i = 0; i < 32; ++i) {
-        seed[i] = static_cast<uint8_t>(random());
+bool fillOsRandom(uint8_t *out, size_t length) {
+    if (out == nullptr || length == 0) {
+        return false;
     }
+    int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return false;
+    }
+    size_t done = 0;
+    while (done < length) {
+        const ssize_t n = read(fd, out + done, length - done);
+        if (n <= 0) {
+            close(fd);
+            secure_zero(out, length);
+            return false;
+        }
+        done += static_cast<size_t>(n);
+    }
+    close(fd);
+    return true;
+}
+
+void initRuntimeKey() {
+    // Mix fresh OS CSPRNG entropy through the per-APK master key. No weak PRNG fallback
+    // is permitted: failure to obtain entropy fails the protected process closed.
+    std::array<uint8_t, 48> seed{};
+    if (!fillOsRandom(seed.data(), 32)) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        std::abort();
+    }
+
     const uint64_t pid = static_cast<uint64_t>(getpid());
     const uintptr_t addressSalt = reinterpret_cast<uintptr_t>(&g_runtime_key);
     memcpy(seed.data() + 32, &pid, sizeof(pid));
     memcpy(seed.data() + 40, &addressSalt,
            sizeof(addressSalt) < 8 ? sizeof(addressSalt) : 8);
 
-    auto derived = hmac_sha256(PARALLAX_UNKNOWN_DATA,
-                               16,
+    auto derived = hmac_sha256(g_parallax_crypto_meta.master_key,
+                               sizeof(g_parallax_crypto_meta.master_key),
                                seed.data(),
                                seed.size());
     secure_zero(seed.data(), seed.size());
-    if (derived.size() == g_runtime_key.size()) {
-        memcpy(g_runtime_key.data(), derived.data(), g_runtime_key.size());
-        secure_zero(derived.data(), derived.size());
-        hardenRuntimeKeyMemory();
-        return;
+    if (derived.size() != g_runtime_key.size()) {
+        if (!derived.empty()) {
+            secure_zero(derived.data(), derived.size());
+        }
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        std::abort();
     }
 
-    // Cryptographic helper failure should be vanishingly rare; still avoid leaving an all
-    // zero wrapper key because that would turn this layer into a predictable no-op.
-    for (size_t i = 0; i < g_runtime_key.size(); ++i) {
-        g_runtime_key[i] = static_cast<uint8_t>(random());
-    }
+    memcpy(g_runtime_key.data(), derived.data(), g_runtime_key.size());
+    secure_zero(derived.data(), derived.size());
     hardenRuntimeKeyMemory();
 }
 

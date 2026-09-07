@@ -13,21 +13,9 @@ import javax.crypto.spec.SecretKeySpec;
 
 public class CryptoUtils {
     private static final byte[] CONFIG_MAGIC = new byte[] {'P', 'A', 'R', '1'};
-    public static final String RC4Transform = "RC4";
     private static final String HMAC_SHA256 = "HmacSHA256";
     private static final int GCM_TAG_BITS = 128;
 
-    public static byte[] rc4Crypt(byte[] key, byte[] in) {
-        try {
-            Cipher cipher = Cipher.getInstance(RC4Transform);
-            SecretKeySpec spec = new SecretKeySpec(key, RC4Transform);
-            cipher.init(Cipher.ENCRYPT_MODE,spec);
-            return cipher.doFinal(in);
-        } catch (Exception e) {
-        }
-
-        return null;
-    }
 
     /**
      * Derive AES-256 key by HMAC-SHA256(randomKey, UTF-8(keyMaterial)).
@@ -53,17 +41,38 @@ public class CryptoUtils {
     }
 
     public static byte[] aesEncrypt(byte[] key, byte[] iv, byte[] in) {
+        if (key == null || key.length != 32 || iv == null || iv.length != 16 || in == null) {
+            throw new IllegalArgumentException("invalid AES-256-CBC input");
+        }
         try {
             Key secretKeySpec = new SecretKeySpec(key, "AES");
             Cipher cipher = Cipher.getInstance("AES/CBC/PKCS5Padding");
-            IvParameterSpec ivParameterSpec = new IvParameterSpec(iv);
-
-            cipher.init(Cipher.ENCRYPT_MODE,secretKeySpec,ivParameterSpec);
+            cipher.init(Cipher.ENCRYPT_MODE, secretKeySpec, new IvParameterSpec(iv));
             return cipher.doFinal(in);
+        } catch (Exception e) {
+            throw new IllegalStateException("AES-CBC encryption failed", e);
         }
-        catch (Exception e){
+    }
+
+    public static byte[] aesCtrCrypt(byte[] key, byte[] nonce, byte[] input) {
+        if (key == null || key.length != 32) {
+            throw new IllegalArgumentException("AES-CTR requires a 256-bit key");
         }
-        return null;
+        if (nonce == null || nonce.length != 16) {
+            throw new IllegalArgumentException("AES-CTR requires a 128-bit counter");
+        }
+        if (input == null) {
+            throw new IllegalArgumentException("AES-CTR input is null");
+        }
+        try {
+            Cipher cipher = Cipher.getInstance("AES/CTR/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE,
+                    new SecretKeySpec(key, "AES"),
+                    new IvParameterSpec(nonce));
+            return cipher.doFinal(input);
+        } catch (Exception e) {
+            throw new IllegalStateException("AES-CTR operation failed", e);
+        }
     }
 
     /**
@@ -104,9 +113,6 @@ public class CryptoUtils {
         byte[] encryptionKey = hmacSha256(masterKey, "Parallax/config/encryption/v1");
         byte[] authenticationKey = hmacSha256(masterKey, "Parallax/config/authentication/v1");
         byte[] ciphertext = aesEncrypt(encryptionKey, iv, in);
-        if (ciphertext == null) {
-            throw new IllegalStateException("config encryption failed");
-        }
         byte[] authenticated = new byte[CONFIG_MAGIC.length + ciphertext.length];
         System.arraycopy(CONFIG_MAGIC, 0, authenticated, 0, CONFIG_MAGIC.length);
         System.arraycopy(ciphertext, 0, authenticated, CONFIG_MAGIC.length, ciphertext.length);

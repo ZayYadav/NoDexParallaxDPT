@@ -50,10 +50,32 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 public abstract class AndroidPackage {
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final File SECURE_TEMP_ROOT = createSecureTempRoot();
+
+    private static File createSecureTempRoot() {
+        try {
+            File root = Files.createTempDirectory("parallax-secure-").toFile();
+            // Best-effort owner-only permissions on POSIX and compatible filesystems.
+            root.setReadable(false, false);
+            root.setWritable(false, false);
+            root.setExecutable(false, false);
+            root.setReadable(true, true);
+            root.setWritable(true, true);
+            root.setExecutable(true, true);
+            root.deleteOnExit();
+            return root;
+        } catch (IOException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
 
     public static abstract class Builder {
         public String filePath = null;
@@ -156,7 +178,7 @@ public abstract class AndroidPackage {
     private String rulesFilePath = null;
     private boolean keepClasses = false;
     private String protectConfigFile;
-    private boolean verifySign = false;
+    private boolean verifySign = true;
     private int riskCheckFlags = 0;
 
     public AndroidPackage(Builder builder) {
@@ -288,64 +310,88 @@ public abstract class AndroidPackage {
      * Combine the compressed dex file with the shell dex to create a new dex file.
      */
     protected void combineDexZipWithShellDex(String packageMainProcessPath) {
+        File renameDexFile = new File(getRenameDexPath());
+        byte[] zipData = null;
+        byte[] shellDex = null;
+        byte[] combined = null;
         try {
             File shellDexFile = new File(getProxyDexPath());
-            File renameDexFile = new File(getRenameDexPath());
-
             ShellConfig shellConfig = ShellConfig.getInstance();
-
-            boolean needRename = !org.apache.commons.lang3.StringUtils.isBlank(shellConfig.getShellPackageName())
+            boolean needRename = !org.apache.commons.lang3.StringUtils.isBlank(
+                    shellConfig.getShellPackageName())
                     && !Const.DEFAULT_SHELL_PACKAGE_NAME.equals(shellConfig.getShellPackageName());
 
-            if(needRename) {
-                DexUtils.renamePackageName(shellDexFile, renameDexFile, shellConfig.getSlashShellPackageName());
+            if (needRename) {
+                DexUtils.renamePackageName(
+                        shellDexFile, renameDexFile, shellConfig.getSlashShellPackageName());
             }
 
-            File originalDexZipFile = new File(getOutAssetsDir(packageMainProcessPath).getAbsolutePath() + File.separator + Const.KEY_DEXES_STORE_NAME);
-            byte[] zipData = com.android.dex.util.FileUtils.readFile(originalDexZipFile);// Read the zip file as binary data
-            byte[] unShellDexArray =  com.android.dex.util.FileUtils.readFile(!needRename ? shellDexFile : renameDexFile); // Read the dex file as binary data
-            int zipDataLen = zipData.length;
-            int unShellDexLen = unShellDexArray.length;
-            LogUtils.info("Dexes zip file size: %s", zipDataLen);
-            LogUtils.info("Proxy dex file size: %s", unShellDexLen);
-            int totalLen = zipDataLen + unShellDexLen + 4;// An additional 4 bytes are added to store the length
-            byte[] newDexBytes = new byte[totalLen]; // Allocate the new length
-
-            // Add the shell code
-            System.arraycopy(unShellDexArray, 0, newDexBytes, 0, unShellDexLen);// First, copy the dex content
-            // Add the unencrypted zip data
-            System.arraycopy(zipData, 0, newDexBytes, unShellDexLen, zipDataLen); // Then copy the APK content after the dex content
-            // Add the length of the shell data
-            System.arraycopy(FileUtils.intToByte(zipDataLen), 0, newDexBytes, totalLen - 4, 4);// The last 4 bytes are for the length
-
-            // Modify the DEX file size header
-            FileUtils.fixFileSizeHeader(newDexBytes);
-            // Modify the DEX SHA1 header
-            FileUtils.fixSHA1Header(newDexBytes);
-            // Modify the DEX CheckSum header
-            FileUtils.fixCheckSumHeader(newDexBytes);
-
-            String targetDexFile = getDexDir(packageMainProcessPath) + File.separator + "classes.dex";
-
-
-            File file = new File(targetDexFile);
-            if (!file.exists()) {
-                file.createNewFile();
+            File actualShellDex = needRename ? renameDexFile : shellDexFile;
+            File dexArchive = new File(
+                    getOutAssetsDir(packageMainProcessPath), Const.KEY_DEXES_STORE_NAME);
+            if (!actualShellDex.isFile() || actualShellDex.length() <= 0
+                    || actualShellDex.length() > 128L * 1024L) {
+                throw new IllegalStateException("bootstrap DEX is missing or outside size policy");
+            }
+            if (!dexArchive.isFile() || dexArchive.length() <= 0
+                    || dexArchive.length() > 768L * 1024L * 1024L) {
+                throw new IllegalStateException("authenticated hollowed DEX archive is missing");
             }
 
-            // Output the new dex file
-            try (FileOutputStream localFileOutputStream = new FileOutputStream(targetDexFile)) {
-                localFileOutputStream.write(newDexBytes);
-                localFileOutputStream.flush();
+            zipData = com.android.dex.util.FileUtils.readFile(dexArchive);
+            shellDex = com.android.dex.util.FileUtils.readFile(actualShellDex);
+            if (zipData.length < 4 || zipData[0] != 0x50 || zipData[1] != 0x4b) {
+                throw new IllegalStateException("hollowed DEX archive is not a ZIP payload");
             }
-            LogUtils.info("New Dex file generated: " + targetDexFile);
-            // Delete the dex zip package
-            FileUtils.deleteRecurse(originalDexZipFile);
-            FileUtils.deleteRecurse(renameDexFile);
-        }catch (Exception e){
-            e.printStackTrace();
+            if (shellDex.length < 112
+                    || shellDex[0] != 'd' || shellDex[1] != 'e'
+                    || shellDex[2] != 'x' || shellDex[3] != '\n') {
+                throw new IllegalStateException("bootstrap DEX header is invalid");
+            }
+
+            long totalLong = (long) shellDex.length + (long) zipData.length + 4L;
+            if (totalLong > Integer.MAX_VALUE) {
+                throw new IllegalStateException("combined protected DEX exceeds format limits");
+            }
+            int totalLen = (int) totalLong;
+            combined = new byte[totalLen];
+            System.arraycopy(shellDex, 0, combined, 0, shellDex.length);
+            System.arraycopy(zipData, 0, combined, shellDex.length, zipData.length);
+            System.arraycopy(FileUtils.intToByte(zipData.length), 0, combined, totalLen - 4, 4);
+
+            FileUtils.fixFileSizeHeader(combined);
+            FileUtils.fixSHA1Header(combined);
+            FileUtils.fixCheckSumHeader(combined);
+
+            File targetDex = new File(getDexDir(packageMainProcessPath), "classes.dex");
+            File tempDex = new File(targetDex.getParentFile(), ".classes.dex.parallax.tmp");
+            try (FileOutputStream output = new FileOutputStream(tempDex, false)) {
+                output.write(combined);
+                output.flush();
+                output.getFD().sync();
+            }
+            replaceGeneratedFile(tempDex, targetDex, "combined protected DEX");
+
+            if (!targetDex.isFile() || targetDex.length() != totalLen) {
+                throw new IllegalStateException("combined protected DEX verification failed");
+            }
+
+            FileUtils.deleteRecurse(dexArchive);
+            if (renameDexFile.exists()) {
+                FileUtils.deleteRecurse(renameDexFile);
+            }
+            LogUtils.info("Combined protected DEX: bootstrap=%d hollowedArchive=%d total=%d",
+                    shellDex.length, zipData.length, totalLen);
+        } catch (Exception e) {
+            throw new IllegalStateException("combined protected DEX creation failed closed", e);
+        } finally {
+            if (zipData != null) Arrays.fill(zipData, (byte) 0);
+            if (shellDex != null) Arrays.fill(shellDex, (byte) 0);
+            if (combined != null) Arrays.fill(combined, (byte) 0);
+            if (renameDexFile.exists()) {
+                FileUtils.deleteRecurse(renameDexFile);
+            }
         }
-
     }
 
     private String getUnsignPackageName(String packageFileName){
@@ -365,15 +411,11 @@ public abstract class AndroidPackage {
         if (packageName == null || packageName.isEmpty()) {
             throw new IllegalStateException("package name is empty, cannot derive config aes key");
         }
-        String buildKey = Parallax.getBuildKey();
-        if (buildKey == null || buildKey.isEmpty()) {
-            throw new IllegalStateException("parallax build key is missing, cannot derive config aes key");
-        }
-        File configFile = new File(getOutAssetsDir(packageDir).getAbsolutePath() + File.separator + Const.KEY_SHELL_CONFIG_STORE_NAME);
+        File configFile = new File(getOutAssetsDir(packageDir).getAbsolutePath()
+                + File.separator + Const.KEY_SHELL_CONFIG_STORE_NAME);
         ShellConfig shellConfig = ShellConfig.getInstance();
         String json = shellConfig.toJson();
-        String keyMaterial = packageName + "_" + buildKey;
-        LogUtils.info("Write config: " + json);
+        String keyMaterial = "Parallax/config/master/v2/" + packageName;
         byte[] masterKey = CryptoUtils.hmacSha256(key, keyMaterial);
         byte[] iv = KeyUtils.generateIV(key);
         byte[] secData = CryptoUtils.encryptAuthenticatedConfig(masterKey, iv, json.getBytes(StandardCharsets.UTF_8));
@@ -391,15 +433,38 @@ public abstract class AndroidPackage {
 
     public abstract void setDebuggable(String manifestDir,boolean debuggable);
 
+    protected static void replaceGeneratedFile(File generated, File target, String label) {
+        if (generated == null || target == null || !generated.isFile() || generated.length() == 0) {
+            throw new IllegalStateException(label + " transform produced no output");
+        }
+        try {
+            try {
+                Files.move(generated.toPath(), target.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
+                Files.move(generated.toPath(), target.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING);
+            }
+            if (!target.isFile() || target.length() == 0) {
+                throw new IOException(label + " replacement verification failed");
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException(label + " replacement failed closed", e);
+        }
+    }
+
     public File getWorkspaceDir() {
-        return FileUtils.getDir(Const.ROOT_OF_OUT_DIR, "parallaxOut-" + Const.RANDOM_DIR_NAME);
+        return FileUtils.getDir(SECURE_TEMP_ROOT.getAbsolutePath(),
+                "parallaxOut-" + Const.RANDOM_DIR_NAME);
     }
 
     /**
      * Get last process（zipalign，sign）dir
      */
     public File getLastProcessDir() {
-        return FileUtils.getDir(Const.ROOT_OF_OUT_DIR, "parallaxLastProcess-" + Const.RANDOM_DIR_NAME);
+        return FileUtils.getDir(SECURE_TEMP_ROOT.getAbsolutePath(),
+                "parallaxLastProcess-" + Const.RANDOM_DIR_NAME);
     }
 
     protected abstract File getOutAssetsDir(String packageDir);
@@ -454,173 +519,223 @@ public abstract class AndroidPackage {
     }
 
     public void compressDexFiles(String packageDir) {
-        Map<String, CompressionMethod> rulesMap = new HashMap<>();
-        rulesMap.put("classes\\d*.dex", CompressionMethod.STORE);
-        String unalignedFilePath = getOutAssetsDir(packageDir).getAbsolutePath() + File.separator + Const.KEY_DEXES_STORE_UNALIGNED_NAME;
-        String alignedFilePath = getOutAssetsDir(packageDir).getAbsolutePath() + File.separator + Const.KEY_DEXES_STORE_NAME;
-        ZipUtils.compress(getDexFiles(getDexDir(packageDir))
-                , unalignedFilePath
-                , rulesMap
-        );
-        RandomAccessFile randomAccessFile = null;
-        FileOutputStream out = null;
-        boolean isAligned = false;
-        try {
-            randomAccessFile = new RandomAccessFile(unalignedFilePath, "r");
-            out = new FileOutputStream(alignedFilePath);
-            ZipAlign.alignZip(randomAccessFile, out);
-            IoUtils.close(randomAccessFile);
-            IoUtils.close(out);
-            org.apache.commons.io.FileUtils.forceDelete(new File(unalignedFilePath));
-            LogUtils.info("zip aligned: " + alignedFilePath);
-            isAligned = true;
-        }
-        catch (Exception e) {
-            LogUtils.warn("WARNING: ZipAlign failed: %s", unalignedFilePath);
-        }
-        finally {
-            IoUtils.close(randomAccessFile);
-            IoUtils.close(out);
+        List<File> dexFiles = getDexFiles(getDexDir(packageDir));
+        if (dexFiles.isEmpty()) {
+            throw new IllegalStateException("no hollowed DEX files available for archive");
         }
 
-        if(!isAligned) {
-            try {
-                Files.move(Paths.get(unalignedFilePath), Paths.get(alignedFilePath), StandardCopyOption.REPLACE_EXISTING);
-            }
-            catch (Exception e1) {
-                e1.printStackTrace();
-            }
+        Map<String, CompressionMethod> rulesMap = new HashMap<>();
+        rulesMap.put("classes\\d*.dex", CompressionMethod.STORE);
+        String unalignedFilePath = getOutAssetsDir(packageDir).getAbsolutePath()
+                + File.separator + Const.KEY_DEXES_STORE_UNALIGNED_NAME;
+        String alignedFilePath = getOutAssetsDir(packageDir).getAbsolutePath()
+                + File.separator + Const.KEY_DEXES_STORE_NAME;
+
+        ZipUtils.compress(dexFiles, unalignedFilePath, rulesMap);
+        try (RandomAccessFile input = new RandomAccessFile(unalignedFilePath, "r");
+             FileOutputStream output = new FileOutputStream(alignedFilePath)) {
+            ZipAlign.alignZip(input, output);
+            output.flush();
+            output.getFD().sync();
+        } catch (Exception e) {
+            throw new IllegalStateException("protected DEX zipalign failed closed", e);
         }
+
+        try {
+            Files.deleteIfExists(Paths.get(unalignedFilePath));
+        } catch (IOException e) {
+            throw new IllegalStateException("cannot remove unaligned protected DEX archive", e);
+        }
+
+        File aligned = new File(alignedFilePath);
+        if (!aligned.isFile() || aligned.length() == 0) {
+            throw new IllegalStateException("aligned protected DEX archive missing");
+        }
+        LogUtils.info("Protected DEX archive aligned.");
     }
 
     public void copyNativeLibs(String packageDir) {
-        File sourceDirRoot = new File(FileUtils.getExecutablePath(), "shell-files" + File.separator + "libs");
-        File destDirRoot = new File(getOutAssetsDir(packageDir).getAbsolutePath(), Const.KEY_LIBS_DIR_NAME);
+        File sourceDirRoot = new File(FileUtils.getExecutablePath(),
+                "shell-files" + File.separator + "libs");
+        File destDirRoot = new File(getOutAssetsDir(packageDir).getAbsolutePath(),
+                Const.KEY_LIBS_DIR_NAME);
 
-        if (!destDirRoot.exists()) {
-            destDirRoot.mkdirs();
-        }
-
-        File[] abiDirs = sourceDirRoot.listFiles();
-        if (abiDirs == null) {
-            return;
-        }
-
-        for (File abiDir : abiDirs) {
-            if (!abiDir.isDirectory()) {
-                continue;
+        try {
+            Files.createDirectories(destDirRoot.toPath());
+            File[] abiDirs = sourceDirRoot.listFiles(File::isDirectory);
+            if (abiDirs == null || abiDirs.length == 0) {
+                throw new IOException("shell native library source is missing");
             }
 
-            String abiName = abiDir.getName();
+            int copied = 0;
+            for (File abiDir : abiDirs) {
+                String abiName = abiDir.getName();
+                if (excludedAbi != null && excludedAbi.contains(abiName)) {
+                    LogUtils.info("Skipping excluded ABI: " + abiName);
+                    continue;
+                }
 
-            if (excludedAbi != null && excludedAbi.contains(abiName)) {
-                LogUtils.info("Skipping excluded ABI: " + abiName);
-                continue;
-            }
+                File destAbiDir = new File(destDirRoot, abiName);
+                Files.createDirectories(destAbiDir.toPath());
 
-            File destAbiDir = new File(destDirRoot, abiName);
-            if (!destAbiDir.exists()) {
-                destAbiDir.mkdirs();
-            }
+                File[] libFiles = abiDir.listFiles();
+                if (libFiles == null) {
+                    throw new IOException("cannot enumerate shell ABI: " + abiName);
+                }
 
-            File[] libFiles = abiDir.listFiles();
-            if (libFiles == null) {
-                continue;
-            }
-
-            for (File libFile : libFiles) {
-                if (libFile.isFile() && libFile.getName().endsWith(".so")) {
-                    File destFile = new File(destAbiDir, libFile.getName());
-                    try {
+                for (File libFile : libFiles) {
+                    if (libFile.isFile() && libFile.getName().endsWith(".so")) {
+                        File destFile = new File(destAbiDir, libFile.getName());
                         Files.copy(libFile.toPath(), destFile.toPath(),
                                 StandardCopyOption.REPLACE_EXISTING);
-                    } catch (IOException e) {
-                        LogUtils.error("Failed to copy library: " + e.getMessage());
+                        if (!destFile.isFile() || destFile.length() != libFile.length()) {
+                            throw new IOException("native library copy verification failed");
+                        }
+                        copied++;
                     }
                 }
             }
+
+            if (copied == 0) {
+                throw new IOException("no native shell libraries copied");
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("native shell copy failed closed", e);
         }
     }
 
-    public void encryptSoFiles(String packageOutDir, byte[] rc4Key){
-        File obfDir = new File(getOutAssetsDir(packageOutDir).getAbsolutePath() + File.separator, Const.KEY_LIBS_DIR_NAME);
-        File[] soAbiDirs = obfDir.listFiles();
-        if(soAbiDirs == null) {
-            return;
+    public void encryptSoFiles(String packageOutDir, byte[] masterKey) {
+        if (masterKey == null || masterKey.length != 16) {
+            throw new IllegalArgumentException("native master key must be exactly 16 bytes");
         }
 
+        File obfDir = new File(getOutAssetsDir(packageOutDir).getAbsolutePath()
+                + File.separator, Const.KEY_LIBS_DIR_NAME);
+        File[] soAbiDirs = obfDir.listFiles(File::isDirectory);
+        if (soAbiDirs == null || soAbiDirs.length == 0) {
+            throw new IllegalStateException("no native shell ABI directories found");
+        }
+
+        int encryptedCount = 0;
         for (File soAbiDir : soAbiDirs) {
             File[] soFiles = soAbiDir.listFiles();
-            if(soFiles == null) {
-                continue;
+            if (soFiles == null) {
+                throw new IllegalStateException("cannot enumerate native shell directory");
             }
 
             for (File soFile : soFiles) {
-                if(!soFile.getAbsolutePath().endsWith(".so")) {
+                if (!soFile.isFile() || !soFile.getName().endsWith(".so")) {
                     continue;
                 }
-                encryptSoFile(soFile, rc4Key);
-                writeSoFileCryptKey(soFile, rc4Key);
+                byte[] metadata = encryptSoFileAuthenticated(soFile, masterKey);
+                writeSoCryptoMetadata(soFile, metadata);
+                Arrays.fill(metadata, (byte) 0);
+                encryptedCount++;
             }
         }
 
+        if (encryptedCount == 0) {
+            throw new IllegalStateException("no native shell libraries were encrypted");
+        }
     }
 
-    private void encryptSoFile(File soFile, byte[] rc4Key) {
+    private byte[] encryptSoFileAuthenticated(File soFile, byte[] masterKey) {
+        byte[] encryptionKey = null;
+        byte[] authenticationKey = null;
+        byte[] nonce = null;
+        byte[] bitcode = null;
+        byte[] ciphertext = null;
+        byte[] authInput = null;
+        byte[] tag = null;
         try (ReadElf readElf = new ReadElf(soFile)) {
-            List<ReadElf.SectionHeader> sectionHeaders = readElf.getSectionHeaders();
-            for (ReadElf.SectionHeader sectionHeader : sectionHeaders) {
-                if(".bitcode".equals(sectionHeader.getName())) {
-                    LogUtils.info("start encrypt %s section: %s, offset: %s, size: %s",
-                            soFile.getAbsolutePath(),
-                            sectionHeader.getName(),
-                            HexUtils.toHexString(sectionHeader.getOffset()),
-                            sectionHeader.getSize()
-                    );
-
-                    byte[] bitcode = IoUtils.readFile(soFile.getAbsolutePath(),
-                            sectionHeader.getOffset(),
-                            (int)sectionHeader.getSize()
-                    );
-
-                    byte[] enc = CryptoUtils.rc4Crypt(rc4Key, bitcode);
-                    IoUtils.writeFile(soFile.getAbsolutePath(),enc,sectionHeader.getOffset());
+            ReadElf.SectionHeader bitcodeSection = null;
+            for (ReadElf.SectionHeader sectionHeader : readElf.getSectionHeaders()) {
+                if (".bitcode".equals(sectionHeader.getName())) {
+                    bitcodeSection = sectionHeader;
+                    break;
                 }
             }
-        }
-        catch (Exception e) {
-            e.printStackTrace();
+            if (bitcodeSection == null || bitcodeSection.getSize() <= 0
+                    || bitcodeSection.getSize() > Integer.MAX_VALUE) {
+                throw new IllegalStateException("encrypted runtime section missing or invalid in "
+                        + soFile.getName());
+            }
+
+            LogUtils.noisy("seal native runtime: %s size=%s",
+                    soFile.getName(), bitcodeSection.getSize());
+
+            bitcode = IoUtils.readFile(soFile.getAbsolutePath(),
+                    bitcodeSection.getOffset(), (int) bitcodeSection.getSize());
+            encryptionKey = CryptoUtils.hmacSha256(masterKey,
+                    "Parallax/bitcode/encryption/v2");
+            authenticationKey = CryptoUtils.hmacSha256(masterKey,
+                    "Parallax/bitcode/authentication/v2");
+            nonce = new byte[16];
+            SECURE_RANDOM.nextBytes(nonce);
+
+            ciphertext = CryptoUtils.aesCtrCrypt(encryptionKey, nonce, bitcode);
+            authInput = new byte[nonce.length + ciphertext.length];
+            System.arraycopy(nonce, 0, authInput, 0, nonce.length);
+            System.arraycopy(ciphertext, 0, authInput, nonce.length, ciphertext.length);
+            tag = CryptoUtils.hmacSha256(authenticationKey, authInput);
+            if (tag.length != 32) {
+                throw new IllegalStateException("unexpected native authentication tag length");
+            }
+
+            IoUtils.writeFile(soFile.getAbsolutePath(), ciphertext, bitcodeSection.getOffset());
+
+            byte[] metadata = new byte[64];
+            System.arraycopy(masterKey, 0, metadata, 0, 16);
+            System.arraycopy(nonce, 0, metadata, 16, 16);
+            System.arraycopy(tag, 0, metadata, 32, 32);
+            return metadata;
+        } catch (Exception e) {
+            throw new IllegalStateException("authenticated native runtime sealing failed", e);
+        } finally {
+            if (encryptionKey != null) Arrays.fill(encryptionKey, (byte) 0);
+            if (authenticationKey != null) Arrays.fill(authenticationKey, (byte) 0);
+            if (nonce != null) Arrays.fill(nonce, (byte) 0);
+            if (bitcode != null) Arrays.fill(bitcode, (byte) 0);
+            if (ciphertext != null) Arrays.fill(ciphertext, (byte) 0);
+            if (authInput != null) Arrays.fill(authInput, (byte) 0);
+            if (tag != null) Arrays.fill(tag, (byte) 0);
         }
     }
 
-    private void writeSoFileCryptKey(File soFile, byte[] rc4key) {
+    private void writeSoCryptoMetadata(File soFile, byte[] metadata) {
+        if (metadata == null || metadata.length != 64) {
+            throw new IllegalArgumentException("native crypto metadata must be 64 bytes");
+        }
         try (ReadElf readElf = new ReadElf(soFile)) {
-            ReadElf.Symbol symbol = readElf.getDynamicSymbol(Const.RC4_KEY_SYMBOL);
-            if(symbol == null) {
-                LogUtils.warn("cannot find symbol in %s, no need write key", soFile.getName());
-                return;
+            ReadElf.SectionHeader keySection = null;
+            for (ReadElf.SectionHeader section : readElf.getSectionHeaders()) {
+                if (Const.NATIVE_KEY_SECTION.equals(section.getName())) {
+                    keySection = section;
+                    break;
+                }
             }
-            else {
-                LogUtils.info("find symbol(%s) in %s", HexUtils.toHexString(symbol.value), soFile.getName());
+            if (keySection == null || keySection.getSize() < metadata.length) {
+                throw new IllegalStateException("native crypto metadata section missing or too small in "
+                        + soFile.getName());
             }
-            long value = symbol.value;
-            int shndx = symbol.shndx;
-            List<ReadElf.SectionHeader> sectionHeaders = readElf.getSectionHeaders();
-            ReadElf.SectionHeader sectionHeader = sectionHeaders.get(shndx);
-            long symbolDataOffset = sectionHeader.getOffset() + value - sectionHeader.getAddr();
-            LogUtils.info("write symbol data to %s(%s)", soFile.getName(), HexUtils.toHexString(symbolDataOffset));
-
-            IoUtils.writeFile(soFile.getAbsolutePath(),rc4key,symbolDataOffset);
-        }
-        catch (Exception e) {
-            e.printStackTrace();
+            IoUtils.writeFile(soFile.getAbsolutePath(), metadata, keySection.getOffset());
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to patch hidden native crypto metadata", e);
         }
     }
 
-    public void deleteAllDexFiles(String packageDir){
+    public void deleteAllDexFiles(String packageDir) {
         List<File> dexFiles = getDexFiles(getDexDir(packageDir));
         for (File dexFile : dexFiles) {
-            dexFile.delete();
+            try {
+                Files.deleteIfExists(dexFile.toPath());
+            } catch (IOException e) {
+                throw new IllegalStateException("cannot remove hollowed source DEX: "
+                        + dexFile.getName(), e);
+            }
+        }
+        if (!getDexFiles(getDexDir(packageDir)).isEmpty()) {
+            throw new IllegalStateException("source DEX files remain after mandatory deletion");
         }
     }
 
@@ -656,119 +771,150 @@ public abstract class AndroidPackage {
 
     public void extractDexCode(String packageDir, String dexCodeSavePath) {
         List<File> dexFiles = getDexFiles(getDexDir(packageDir));
-        Map<Integer,List<Instruction>> instructionMap = new HashMap<>();
-        String appNameNew = Const.KEY_CODE_ITEM_STORE_NAME;
-        String dataOutputPath = dexCodeSavePath + File.separator + appNameNew;
+        if (dexFiles.isEmpty()) {
+            throw new IllegalStateException("no DEX files found for protection");
+        }
+
+        Map<Integer, List<Instruction>> instructionMap = new ConcurrentHashMap<>();
+        String dataOutputPath = dexCodeSavePath + File.separator + Const.KEY_CODE_ITEM_STORE_NAME;
 
         CountDownLatch countDownLatch = new CountDownLatch(dexFiles.size());
         AtomicInteger totalClassesCount = new AtomicInteger(0);
         AtomicInteger keepClassesCount = new AtomicInteger(0);
+        AtomicReference<Throwable> extractionFailure = new AtomicReference<>();
 
         ShellConfig shellConfig = ShellConfig.getInstance();
         if (shellConfig.getInsnsXorKey() == 0) {
-            int key = new SecureRandom().nextInt();
+            int key = SECURE_RANDOM.nextInt();
             if (key == 0) {
                 key = 0x6f3a2c1d;
             }
             shellConfig.setInsnsXorKey(key);
         }
-        for(File dexFile : dexFiles) {
+
+        for (File dexFile : dexFiles) {
             ThreadPool.getInstance().execute(() -> {
-                final int dexNo = DexUtils.getDexNumber(dexFile.getName());
-                if(dexNo < 0) {
-                    countDownLatch.countDown();
-                    return;
-                }
-
                 File injectedDexFile = new File(dexFile.getAbsolutePath() + "_inject.dex");
-
+                File extractedDexFile = null;
+                File dexFileRightHashes = null;
                 try {
+                    int dexNo = DexUtils.getDexNumber(dexFile.getName());
+                    if (dexNo < 0) {
+                        throw new IllegalStateException("invalid DEX filename: " + dexFile.getName());
+                    }
+
+                    // Bootstrap/JNI injection is mandatory. Never continue with the original
+                    // DEX when this transformation fails.
                     DexUtils.injectInvokeMethod(dexFile.getAbsolutePath(),
                             injectedDexFile.getAbsolutePath(),
-                            shellConfig.getJniClassNameSig()
-                    );
-
-                    dexFile.delete();
-
-                    injectedDexFile.renameTo(dexFile);
-                }
-                catch (Exception e) {
-                    injectedDexFile.delete();
-                }
-
-                if(isKeepClasses() && DexUtils.dexContainsKeepInPlace(dexFile)) {
-                    // Skip split entirely for dexes containing keep-in-place classes (e.g. Compose):
-                    // the re-partition would break Compose's cross-dex interface linking and cause IncompatibleClassChangeError.
-                    // The dex still goes through extractAllMethods (rule-matched classes are skipped as usual); it is just not split.
-                    LogUtils.info("Skip split for dex with keep-in-place classes (e.g. Compose): %s", dexFile.getName());
-                }
-                else if(isKeepClasses()) {
-                    File keepDex = new File(getKeepDexTempDir(packageDir).getAbsolutePath() + File.separator + dexFile.getName());
-                    File splitDex = new File(dexFile.getAbsolutePath() + "_split.dex");
-
-                    try {
-                        Pair<Integer, Integer> classesCountPair = DexUtils.splitDex(dexFile, keepDex, splitDex);
-
-                        keepClassesCount.set(keepClassesCount.get() + classesCountPair.getKey());
-                        totalClassesCount.set(totalClassesCount.get() + classesCountPair.getValue());
-
-                        dexFile.delete();
-
-                        splitDex.renameTo(dexFile);
-                    } catch (Exception e) {
-                        LogUtils.warn("WARNING: split %s fail", dexFile.getName());
-                        keepDex.delete();
-                        splitDex.delete();
+                            shellConfig.getJniClassNameSig());
+                    if (!injectedDexFile.isFile() || injectedDexFile.length() == 0) {
+                        throw new IllegalStateException("JNI injection produced no DEX");
                     }
-                }
+                    Files.move(injectedDexFile.toPath(), dexFile.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING);
 
-                String extractedDexName = dexFile.getName().endsWith(".dex") ? dexFile.getName().replaceAll("\\.dex$", "_extracted.dat") : "_extracted.dat";
-                File extractedDexFile = new File(dexFile.getParent(), extractedDexName);
+                    if (isKeepClasses() && DexUtils.dexContainsKeepInPlace(dexFile)) {
+                        LogUtils.info("Keep-in-place DEX detected: %s", dexFile.getName());
+                    } else if (isKeepClasses()) {
+                        File keepDex = new File(getKeepDexTempDir(packageDir), dexFile.getName());
+                        File splitDex = new File(dexFile.getAbsolutePath() + "_split.dex");
+                        try {
+                            Pair<Integer, Integer> classesCountPair =
+                                    DexUtils.splitDex(dexFile, keepDex, splitDex);
+                            if (!splitDex.isFile() || splitDex.length() == 0) {
+                                throw new IllegalStateException("DEX split produced no protected output");
+                            }
+                            keepClassesCount.addAndGet(classesCountPair.getKey());
+                            totalClassesCount.addAndGet(classesCountPair.getValue());
+                            Files.move(splitDex.toPath(), dexFile.toPath(),
+                                    StandardCopyOption.REPLACE_EXISTING);
+                        } catch (Exception splitFailure) {
+                            // Keep-class splitting is an optimization. The unsplit DEX still
+                            // proceeds through mandatory method extraction below.
+                            keepDex.delete();
+                            splitDex.delete();
+                            LogUtils.warn("Keep-class split skipped for %s", dexFile.getName());
+                        }
+                    }
 
-                boolean obfuscate = !isSmaller();
-                List<Instruction> ret = DexUtils.extractAllMethods(dexFile, extractedDexFile, getPackageName(), isDumpCode(), obfuscate);
-                instructionMap.put(dexNo, ret);
+                    String extractedDexName = dexFile.getName().endsWith(".dex")
+                            ? dexFile.getName().replaceAll("\\.dex$", "_extracted.dat")
+                            : "_extracted.dat";
+                    extractedDexFile = new File(dexFile.getParent(), extractedDexName);
 
-                File dexFileRightHashes = new File(dexFile.getParent(), FileUtils.getNewFileSuffix(dexFile.getName(),"dat"));
+                    boolean obfuscate = !isSmaller();
+                    List<Instruction> ret = DexUtils.extractAllMethods(
+                            dexFile, extractedDexFile, getPackageName(), isDumpCode(), obfuscate);
+                    if (ret == null || !extractedDexFile.isFile() || extractedDexFile.length() == 0) {
+                        throw new IllegalStateException("method extraction failed for "
+                                + dexFile.getName());
+                    }
+                    instructionMap.put(dexNo, ret);
 
-                try {
+                    dexFileRightHashes = new File(dexFile.getParent(),
+                            FileUtils.getNewFileSuffix(dexFile.getName(), "dat"));
                     DexUtils.writeHashes(extractedDexFile, dexFileRightHashes);
-                    dexFile.delete();
-                    dexFileRightHashes.renameTo(dexFile);
-                }
-                catch (Exception e) {
-                }
-                finally {
-                    if(extractedDexFile.exists()) {
+                    if (!dexFileRightHashes.isFile() || dexFileRightHashes.length() == 0) {
+                        throw new IllegalStateException("hollowed DEX rewrite failed for "
+                                + dexFile.getName());
+                    }
+
+                    // Atomic replacement: only the hollowed/hash-rewritten DEX survives.
+                    Files.move(dexFileRightHashes.toPath(), dexFile.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING);
+
+                    if ("classes.dex".equals(dexFile.getName())) {
+                        String dexSignature = DexUtils.getDexSignature(dexFile);
+                        if (dexSignature == null || dexSignature.isEmpty()) {
+                            throw new IllegalStateException("hollowed primary DEX signature missing");
+                        }
+                        ShellConfig.getInstance().setDexSign(dexSignature);
+                    }
+                } catch (Throwable t) {
+                    extractionFailure.compareAndSet(null, t);
+                } finally {
+                    if (injectedDexFile.exists()) injectedDexFile.delete();
+                    if (extractedDexFile != null && extractedDexFile.exists()) {
                         extractedDexFile.delete();
                     }
+                    if (dexFileRightHashes != null && dexFileRightHashes.exists()) {
+                        dexFileRightHashes.delete();
+                    }
+                    countDownLatch.countDown();
                 }
-
-                if("classes.dex".equals(dexFile.getName())) {
-                    String dexSignature = DexUtils.getDexSignature(dexFile);
-                    ShellConfig.getInstance().setDexSign(dexSignature);
-                }
-                countDownLatch.countDown();
             });
-
         }
 
         ThreadPool.getInstance().shutdown();
-
         try {
             countDownLatch.await();
-        }
-        catch (Exception ignored){
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("DEX protection interrupted", e);
         }
 
-        if(isKeepClasses()) {
-            LogUtils.info("Keep classes: %d, total classes: %d", keepClassesCount.get(), totalClassesCount.get());
+        Throwable failure = extractionFailure.get();
+        if (failure != null) {
+            throw new IllegalStateException("DEX extraction/hollowing failed closed", failure);
         }
+        if (instructionMap.size() != dexFiles.size()) {
+            throw new IllegalStateException("not every source DEX produced a protected method vault");
+        }
+
+        if (isKeepClasses()) {
+            LogUtils.info("Keep classes: %d, total classes: %d",
+                    keepClassesCount.get(), totalClassesCount.get());
+        }
+
         MultiDexCode multiDexCode = MultiDexCodeUtils.makeMultiDexCode(instructionMap);
-
-        MultiDexCodeUtils.writeMultiDexCode(dataOutputPath,multiDexCode);
-
+        MultiDexCodeUtils.writeMultiDexCode(dataOutputPath, multiDexCode);
+        File vault = new File(dataOutputPath);
+        if (!vault.isFile() || vault.length() == 0) {
+            throw new IllegalStateException("protected method-body vault was not produced");
+        }
     }
+
     /**
      * Get all dex files
      */
@@ -804,8 +950,11 @@ public abstract class AndroidPackage {
         }
 
         File outputDirFile = new File(outputDir);
-        if (!outputDirFile.exists()) {
-            outputDirFile.mkdirs();
+        if (!outputDirFile.exists() && !outputDirFile.mkdirs() && !outputDirFile.isDirectory()) {
+            throw new IllegalStateException("cannot create protected package output directory");
+        }
+        if (!outputDirFile.isDirectory()) {
+            throw new IllegalStateException("protected package output path is not a directory");
         }
 
         String originPackageName = new File(originPackagePath).getName();
@@ -820,30 +969,22 @@ public abstract class AndroidPackage {
         }
         ZipUtils.zip(unpackFilePath, unzipalignPackagePath, isSmaller());
 
-        String keyStoreFilePath = packageLastProcessDir + File.separator + Const.KEY_STORE_ASSET_NAME;
-
-        try {
-            ZipUtils.readResourceFromRuntime(Const.KEY_STORE_ASSET_PATH, keyStoreFilePath);
-        }
-        catch (IOException e){
-            e.printStackTrace();
-        }
-
         String unsignedPackagePath = outputDir
                 + File.separator
                 + (resultFileName != null ? "unsigned_" + resultFileName : getUnsignPackageName(originPackageName));
 
-        boolean zipalignSuccess = false;
-
         try {
             zipalign(unzipalignPackagePath, unsignedPackagePath);
-            zipalignSuccess = true;
-            LogUtils.info("zipalign success.");
         } catch (Exception e) {
-            LogUtils.error("zipalign failed!");
+            throw new IllegalStateException("final package zipalign failed closed", e);
         }
+        File unsignedPackage = new File(unsignedPackagePath);
+        if (!unsignedPackage.isFile() || unsignedPackage.length() == 0) {
+            throw new IllegalStateException("zipaligned package output is missing");
+        }
+        LogUtils.info("Final package zipalign verified.");
 
-        String willSignPackagePath = zipalignSuccess ? unsignedPackagePath : unzipalignPackagePath;
+        String willSignPackagePath = unsignedPackagePath;
 
         boolean signResult = false;
 
@@ -852,19 +993,19 @@ public abstract class AndroidPackage {
                 + (resultFileName != null ? resultFileName : getSignedPackageName(originPackageName));
 
         if(isSign()) {
-            if(shellConfig.getSignatureConfig() == null || !new File(shellConfig.getSignatureConfig().getKeystore()).exists()) {
-                LogUtils.info("Use default key store");
-                signResult = signPackageDebug(willSignPackagePath, keyStoreFilePath, signedPackagePath);
+            ShellConfig.SignatureConfig signing = shellConfig.getSignatureConfig();
+            if (signing == null || !new File(signing.getKeystore()).isFile()) {
+                throw new IllegalStateException("external release signing config is required");
             }
-            else {
-                LogUtils.info("Use custom key store");
-                signResult = sign(willSignPackagePath,
-                        shellConfig.getSignatureConfig().getKeystore(),
-                        signedPackagePath,
-                        shellConfig.getSignatureConfig().getAlias(),
-                        shellConfig.getSignatureConfig().getStorePassword(),
-                        shellConfig.getSignatureConfig().getKeyPassword()
-                        );
+            LogUtils.info("Use external signing keystore (path/passwords redacted)");
+            signResult = sign(willSignPackagePath,
+                    signing.getKeystore(),
+                    signedPackagePath,
+                    signing.getAlias(),
+                    signing.getStorePassword(),
+                    signing.getKeyPassword());
+            if (!signResult) {
+                throw new IllegalStateException("APK signing failed closed");
             }
         }
         else {
@@ -873,12 +1014,13 @@ public abstract class AndroidPackage {
                     Files.copy(Paths.get(willSignPackagePath), Paths.get(signedPackagePath),
                             StandardCopyOption.REPLACE_EXISTING);
                 }
-            } catch (IOException ignored) {}
+            } catch (IOException e) {
+                throw new IllegalStateException("unsigned output copy failed closed", e);
+            }
         }
 
         File willSignPackageFile = new File(willSignPackagePath);
         File signedPackageFile = new File(signedPackagePath);
-        File keyStoreFile = new File(keyStoreFilePath);
         File idsigFile = new File(signedPackagePath + ".idsig");
 
         LogUtils.info("unsign package file: %s, exists: %s", willSignPackageFile.getAbsolutePath(), willSignPackageFile.exists());
@@ -893,29 +1035,17 @@ public abstract class AndroidPackage {
             LogUtils.info("signed package file: " + signedPackageFile.getAbsolutePath());
         }
 
-        if(zipalignSuccess) {
-            try {
-                Files.deleteIfExists(Paths.get(unzipalignPackagePath));
-            }catch (Exception e){
-                LogUtils.debug("unzipalign package path err = %s", e);
-            }
+        try {
+            Files.deleteIfExists(Paths.get(unzipalignPackagePath));
+        } catch (IOException e) {
+            throw new IllegalStateException("temporary package cleanup failed", e);
         }
 
         if (idsigFile.exists()) {
             idsigFile.delete();
         }
 
-        if (keyStoreFile.exists()) {
-            keyStoreFile.delete();
-        }
         LogUtils.info("protected package output path: " + resultPath + "\n");
-    }
-
-    private boolean signPackageDebug(String packagePath, String keyStorePath, String signedPackagePath) {
-        return sign(packagePath, keyStorePath, signedPackagePath,
-                Const.KEY_ALIAS,
-                Const.STORE_PASSWORD,
-                Const.KEY_PASSWORD);
     }
 
     protected abstract boolean sign(String packagePath, String keyStorePath, String signedPackagePath,
@@ -970,7 +1100,7 @@ public abstract class AndroidPackage {
                     shellConfigFromFile.setShellPackageName(autoShellPackageName);
                 }
 
-                LogUtils.info("Use config: %s", shellConfigFromFile);
+                LogUtils.info("Use protection config (sensitive signing fields redacted)");
                 shellConfig.init(shellConfigFromFile);
 
             }
@@ -979,8 +1109,8 @@ public abstract class AndroidPackage {
             }
 
         } catch (Exception e) {
-            LogUtils.error("Read config file error");
-            ShellConfig.getInstance().init(autoShellPackageName);
+            throw new IllegalStateException("Protection config parse failed closed: "
+                    + getProtectConfigFile(), e);
         }
     }
 
@@ -1032,60 +1162,44 @@ public abstract class AndroidPackage {
     }
 
     private String computeSignatureSha256() {
-        ShellConfig shellConfig = ShellConfig.getInstance();
-        ShellConfig.SignatureConfig sigConfig = shellConfig.getSignatureConfig();
+        ShellConfig.SignatureConfig sigConfig = ShellConfig.getInstance().getSignatureConfig();
+        if (sigConfig == null
+                || org.apache.commons.lang3.StringUtils.isBlank(sigConfig.getKeystore())
+                || org.apache.commons.lang3.StringUtils.isBlank(sigConfig.getStorePassword())
+                || org.apache.commons.lang3.StringUtils.isBlank(sigConfig.getAlias())) {
+            throw new IllegalStateException(
+                    "runtime signature verification requires an explicit signing config");
+        }
 
-        String keystorePath = null;
-        String storePassword = Const.STORE_PASSWORD;
-        String alias = Const.KEY_ALIAS;
-
-        if (sigConfig != null
-                && !org.apache.commons.lang3.StringUtils.isBlank(sigConfig.getKeystore())
-                && new File(sigConfig.getKeystore()).exists()) {
-            keystorePath = sigConfig.getKeystore();
-            if (!org.apache.commons.lang3.StringUtils.isBlank(sigConfig.getStorePassword())) {
-                storePassword = sigConfig.getStorePassword();
-            }
-            if (!org.apache.commons.lang3.StringUtils.isBlank(sigConfig.getAlias())) {
-                alias = sigConfig.getAlias();
-            }
-            LogUtils.info("Computing SHA-256 from signing keystore: " + keystorePath);
-        } else {
-            LogUtils.info("Computing SHA-256 from default keystore");
+        File keystoreFile = new File(sigConfig.getKeystore());
+        if (!keystoreFile.isFile()) {
+            throw new IllegalStateException("configured signing keystore does not exist");
         }
 
         try {
-            KeyStore ks = null;
-            char[] pwdChars = storePassword.toCharArray();
-            if (keystorePath != null) {
-                try (FileInputStream fis = new FileInputStream(keystorePath)) {
-                    ks = loadKeyStore(fis, pwdChars);
-                }
+            KeyStore ks;
+            char[] pwdChars = sigConfig.getStorePassword().toCharArray();
+            try (FileInputStream fis = new FileInputStream(keystoreFile)) {
+                ks = loadKeyStore(fis, pwdChars);
             }
-
             if (ks == null) {
-                LogUtils.error("Failed to load keystore");
-                return null;
+                throw new IllegalStateException("failed to load configured signing keystore");
             }
 
-            Certificate cert = ks.getCertificate(alias);
+            Certificate cert = ks.getCertificate(sigConfig.getAlias());
             if (cert == null) {
-                LogUtils.error("Certificate not found for alias: " + alias);
-                return null;
+                throw new IllegalStateException("configured signing alias certificate not found");
             }
 
             MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(cert.getEncoded());
-
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hash) {
-                sb.append(String.format(Locale.US, "%02x", b));
+            byte[] digest = md.digest(cert.getEncoded());
+            StringBuilder sb = new StringBuilder(64);
+            for (byte b : digest) {
+                sb.append(String.format(Locale.US, "%02x", b & 0xff));
             }
             return sb.toString();
-
         } catch (Exception e) {
-            LogUtils.error("Failed to compute certificate SHA-256: " + e.getMessage());
-            return null;
+            throw new IllegalStateException("failed to compute signing certificate SHA-256", e);
         }
     }
 
@@ -1109,17 +1223,49 @@ public abstract class AndroidPackage {
         processProtectConfigFile();
 
         ShellConfig shellConfig = ShellConfig.getInstance();
+
+        // Enforce the ultra profile here as well as in the CLI. This closes alternate
+        // Builder/config-file entry points that could otherwise create a deliberately
+        // weakened or non-runnable protected package.
+        if (isDebuggable()
+                || !isSign()
+                || !isVerifySign()
+                || !isAppComponentFactory()
+                || isDumpCode()
+                || isKeepClasses()
+                || isSmaller()
+                || !org.apache.commons.lang3.StringUtils.isBlank(getRulesFilePath())
+                || getRiskCheckFlags() != 0
+                || shellConfig.getRiskCheckFlags() != 0) {
+            throw new IllegalStateException(
+                    "ultra protection policy rejects debug/no-sign/disabled-check/"
+                            + "dump/keep/smaller/exclusion modes");
+        }
+        shellConfig.setRiskCheckFlags(0);
+        if (isSign()) {
+            ShellConfig.SignatureConfig sig = shellConfig.getSignatureConfig();
+            if (sig == null
+                    || org.apache.commons.lang3.StringUtils.isBlank(sig.getKeystore())
+                    || org.apache.commons.lang3.StringUtils.isBlank(sig.getAlias())
+                    || org.apache.commons.lang3.StringUtils.isBlank(sig.getStorePassword())
+                    || org.apache.commons.lang3.StringUtils.isBlank(sig.getKeyPassword())
+                    || !new File(sig.getKeystore()).isFile()) {
+                throw new IllegalStateException(
+                        "release signing is fail-closed: provide a valid external keystore in --protect-config");
+            }
+        }
+        if (isVerifySign() && !isSign()) {
+            throw new IllegalStateException(
+                    "runtime signer verification requires protector-side signing");
+        }
+
         // Merge CLI flags into config-file flags (each bit = one switch)
         shellConfig.setRiskCheckFlags(shellConfig.getRiskCheckFlags() | getRiskCheckFlags());
 
         if (isVerifySign()) {
             String sha256 = computeSignatureSha256();
-            if (sha256 != null) {
-                shellConfig.setAppSignSha256(sha256);
-                LogUtils.info("Signature verification enabled, SHA-256: " + sha256);
-            } else {
-                LogUtils.error("Failed to compute certificate SHA-256, signature verification disabled.");
-            }
+            shellConfig.setAppSignSha256(sha256);
+            LogUtils.info("Runtime signer verification enabled.");
         }
 
         JunkCodeGenerator.generateJunkCodeDex(new File(getJunkCodeDexPath()));

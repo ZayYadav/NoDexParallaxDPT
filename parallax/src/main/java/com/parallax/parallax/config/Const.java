@@ -53,20 +53,14 @@ public class Const {
     public static final int FLAG_DISABLE_CRC_DETECT = 1 << 1;
     public static final int FLAG_DISABLE_ANTI_DEBUG = 1 << 2;
 
-    public static final String KEY_STORE_ASSET_NAME = "parallax.jks";
-    public static final String KEY_STORE_ASSET_PATH = "assets/" + KEY_STORE_ASSET_NAME;
-    public static final String STORE_PASSWORD = "android";
-    public static final String KEY_PASSWORD = "android";
-    public static final String KEY_ALIAS = "key0";
     public static final String DEFAULT_THREAD_NAME = "parallax";
 
     public static final String ROOT_OF_OUT_DIR = System.getProperty("java.io.tmpdir");
 
     public static final short MULTI_DEX_CODE_VERSION = 2;
-    public static final String RC4_KEY_SYMBOL = "PARALLAX_UNKNOWN_DATA";
+    public static final String NATIVE_KEY_SECTION = ".psec";
 
     public static final String KEY_SHELL_CONFIG_STORE_NAME = "ItsParallaxBaby";
-    public static final String KEY_BUILD_KEY_FILE_NAME = "build-key";
     public static final String KEY_DEXES_STORE_NAME = "i11111i111.zip";
     public static final String KEY_DEXES_STORE_UNALIGNED_NAME = "i11111i111_unaligned.zip";
     public static final String KEY_CODE_ITEM_STORE_NAME = "Parallax.love";

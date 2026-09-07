@@ -17,19 +17,11 @@ import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 
 import java.io.File;
-import java.io.IOException;
-import java.io.InputStream;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.List;
-import java.util.jar.Manifest;
 
 public class Parallax {
 
-    private static final String MANIFEST_BUILD_KEY_ATTR = "Parallax-Build-Key";
     private static final String OPTION_HIGH_VALUE_METHODS = "high-value-methods";
 
     public static void main(String[] args) {
@@ -39,8 +31,8 @@ public class Parallax {
                 return;
             }
             androidPackage.protect();
-        } catch (Exception e){
-            e.printStackTrace();
+        } catch (Exception e) {
+            throw new IllegalStateException("Parallax protection failed closed", e);
         }
     }
 
@@ -63,44 +55,6 @@ public class Parallax {
         return version;
     }
 
-    public static String getBuildKey() {
-        // Prefer the key written next to shell SO artifacts so encrypt side
-        // always matches the native binary being packaged.
-        String executablePath = FileUtils.getExecutablePath();
-        if (executablePath != null && !executablePath.isEmpty()) {
-            File keyFile = new File(executablePath,
-                    "shell-files" + File.separator + Const.KEY_BUILD_KEY_FILE_NAME);
-            if (keyFile.isFile()) {
-                try {
-                    String value = Files.readString(keyFile.toPath(), StandardCharsets.UTF_8).trim();
-                    if (!value.isEmpty()) {
-                        return value;
-                    }
-                } catch (IOException ignored) {
-                    // fall through to jar manifest
-                }
-            }
-        }
-
-        try {
-            ClassLoader classLoader = Parallax.class.getClassLoader();
-            if (classLoader == null) {
-                return null;
-            }
-            Enumeration<URL> resources = classLoader.getResources("META-INF/MANIFEST.MF");
-            while (resources.hasMoreElements()) {
-                try (InputStream is = resources.nextElement().openStream()) {
-                    String value = new Manifest(is).getMainAttributes().getValue(MANIFEST_BUILD_KEY_ATTR);
-                    if (value != null && !value.isEmpty()) {
-                        return value;
-                    }
-                }
-            }
-        } catch (IOException ignored) {
-            // fall through
-        }
-        return null;
-    }
 
     private static AndroidPackage parseOptions(String[] args) {
         Options options = new Options();
@@ -125,7 +79,7 @@ public class Parallax {
                 + "- arm64     (arm64-v8a)\n"
                 + "- x86\n"
                 + "- x86_64"));
-        options.addOption(new Option(Const.OPTION_VERIFY_SIGN, Const.OPTION_VERIFY_SIGN_LONG, false, "Enable runtime app signature verification. The certificate SHA-256 is computed automatically from the signing keystore.\n"));
+        options.addOption(new Option(Const.OPTION_VERIFY_SIGN, Const.OPTION_VERIFY_SIGN_LONG, false, "Runtime signer verification is mandatory for APK protection; this flag is retained for compatibility.\n"));
         options.addOption(new Option(null, Const.OPTION_DISABLE_FRIDA_DETECT_LONG, false, "Disable runtime Frida detection.\n"));
         options.addOption(new Option(null, Const.OPTION_DISABLE_CRC_DETECT_LONG, false, "Disable runtime libc .text CRC detection.\n"));
         options.addOption(new Option(null, Const.OPTION_DISABLE_ANTI_DEBUG_LONG, false, "Disable runtime anti-debug.\n"));
@@ -160,6 +114,26 @@ public class Parallax {
             String filePath = commandLine.getOptionValue(Const.OPTION_INPUT_FILE);
             HighValueVmCoordinator.setRulesPath(commandLine.getOptionValue(OPTION_HIGH_VALUE_METHODS));
 
+            boolean packageFile = filePath.endsWith(".apk") || filePath.endsWith(".aab");
+            if (packageFile) {
+                boolean unsafeApkMode = commandLine.hasOption(Const.OPTION_NO_SIGN_PACKAGE)
+                        || commandLine.hasOption(Const.OPTION_DEBUGGABLE_LONG)
+                        || commandLine.hasOption(Const.OPTION_DISABLE_APP_COMPONENT_FACTORY_LONG)
+                        || commandLine.hasOption(Const.OPTION_DISABLE_FRIDA_DETECT_LONG)
+                        || commandLine.hasOption(Const.OPTION_DISABLE_CRC_DETECT_LONG)
+                        || commandLine.hasOption(Const.OPTION_DISABLE_ANTI_DEBUG_LONG)
+                        || commandLine.hasOption(Const.OPTION_DUMP_CODE_LONG)
+                        || commandLine.hasOption(Const.OPTION_KEEP_CLASSES)
+                        || commandLine.hasOption(Const.OPTION_SMALLER)
+                        || commandLine.hasOption(Const.OPTION_DO_NOT_PROTECT_CLASSES_RULES);
+                if (unsafeApkMode) {
+                    usage(options,
+                            "Ultra package mode is fail-closed: debug/no-sign/security-disable/dump/"
+                                    + "keep-classes/smaller/exclusion options are not permitted.");
+                    return null;
+                }
+            }
+
             int riskCheckFlags = 0;
             if (commandLine.hasOption(Const.OPTION_DISABLE_FRIDA_DETECT_LONG)) {
                 riskCheckFlags |= Const.FLAG_DISABLE_FRIDA_DETECT;
@@ -184,7 +158,7 @@ public class Parallax {
                         .keepClasses(commandLine.hasOption(Const.OPTION_KEEP_CLASSES))
                         .smaller(commandLine.hasOption(Const.OPTION_SMALLER))
                         .protectConfigFile(commandLine.getOptionValue(Const.OPTION_PROTECT_CONFIG))
-                        .verifySign(commandLine.hasOption(Const.OPTION_VERIFY_SIGN))
+                        .verifySign(true)
                         .riskCheckFlags(riskCheckFlags)
                         .build();
             }
@@ -205,7 +179,7 @@ public class Parallax {
                         .keepClasses(commandLine.hasOption(Const.OPTION_KEEP_CLASSES))
                         .smaller(commandLine.hasOption(Const.OPTION_SMALLER))
                         .protectConfigFile(commandLine.getOptionValue(Const.OPTION_PROTECT_CONFIG))
-                        .verifySign(commandLine.hasOption(Const.OPTION_VERIFY_SIGN))
+                        .verifySign(true)
                         .riskCheckFlags(riskCheckFlags)
                         .build();
             }

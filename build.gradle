@@ -9,27 +9,14 @@ static def generateHexString() {
     return Long.toHexString(secureRandom.nextLong())
 }
 
-// Keep the requested public shell library name stable while preserving a per-build crypto key.
-def parallaxBuildIdsFile = file("${rootDir}/build/parallax-build-ids.properties")
-def parallaxBuildIds = new Properties()
-if (parallaxBuildIdsFile.exists()) {
-    parallaxBuildIdsFile.withInputStream { parallaxBuildIds.load(it) }
-}
+// Stable public shell library name. Per-APK cryptographic material is generated
+// by the protector and patched into the hidden native metadata section.
 def resolvedSoName = "ParallaxLover"
-def resolvedBuildKey = parallaxBuildIds.getProperty("parallaxBuildKey")
-if (!resolvedBuildKey || resolvedBuildKey.isEmpty()) {
-    resolvedBuildKey = generateHexString()
-}
-parallaxBuildIds.setProperty("soName", resolvedSoName)
-parallaxBuildIds.setProperty("parallaxBuildKey", resolvedBuildKey)
-parallaxBuildIdsFile.parentFile.mkdirs()
-parallaxBuildIdsFile.withOutputStream { parallaxBuildIds.store(it, "parallax-shell build ids. Delete to regenerate.") }
 
 ext {
     soName = resolvedSoName
     fullSoName = "${soName}.so"
     shellPackageName = generateHexString()
-    parallaxBuildKey = resolvedBuildKey
 
     compileSdkVersion = 36
     minSdkVersion = 21
@@ -42,17 +29,4 @@ ext {
     parallaxJavaVersion = JavaVersion.VERSION_11
 
     cmakeVersion = "3.31.1"
-}
-
-subprojects { sub ->
-    sub.afterEvaluate {
-        sub.tasks.matching { it.name == 'clean' }.configureEach { task ->
-            task.doFirst {
-                if (parallaxBuildIdsFile.exists()) {
-                    parallaxBuildIdsFile.delete()
-                    println("Deleted ${parallaxBuildIdsFile}")
-                }
-            }
-        }
-    }
 }

@@ -7,6 +7,7 @@
 #include "external/json/json.hpp"
 
 #include <memory>
+#include <stdexcept>
 #include <android/api-level.h>
 
 using namespace parallax;
@@ -21,7 +22,17 @@ std::unordered_map<int,std::vector<data::CodeItem *> *> dexMap;
 
 PARALLAX_DATA_SECTION uint8_t DATA_SECTION_BITCODE[] = ".bitcode";
 PARALLAX_DATA_SECTION uint8_t DATA_SECTION_RO_DATA[] = ".rodata";
-KEEP_SYMBOL PARALLAX_DATA_SECTION uint8_t PARALLAX_UNKNOWN_DATA[] = "1234567890abcdef";
+SECTION(".psec") __attribute__((used, visibility("hidden")))
+ParallaxCryptoMetadata g_parallax_crypto_meta = {
+        {0x91, 0x2d, 0x7a, 0xc4, 0x38, 0xe1, 0x56, 0xaf,
+         0x0b, 0xd3, 0x69, 0x84, 0xf2, 0x17, 0x5c, 0xbe},
+        {0x47, 0xa1, 0x9c, 0x2e, 0x6b, 0xd8, 0x31, 0xf0,
+         0x55, 0x73, 0x0c, 0xe4, 0x92, 0x1f, 0xb6, 0x68},
+        {0x0d, 0x7e, 0x53, 0xc1, 0x29, 0xa4, 0xf8, 0x16,
+         0x65, 0xba, 0x3d, 0x90, 0x42, 0xec, 0x71, 0x5f,
+         0x83, 0x24, 0xd9, 0x0a, 0xb7, 0x6c, 0x38, 0xe2,
+         0x14, 0x95, 0x4b, 0xfa, 0x60, 0x2f, 0xcd, 0x87}
+};
 
 ShellConfig g_shell_config;
 
@@ -37,6 +48,7 @@ static JNINativeMethod gMethods[] = {
         {"ra", "(Ljava/lang/String;)Ljava/lang/Object;",                               (void *) replaceApplication},
         {"clinit", "()V",                               (void *) clinit},
         {"securityStatus", "(Landroid/content/Context;)I",                (void *) securityStatus},
+        {"vsd", "(Ljava/lang/String;)Z",                               (void *) verifySourceSignerDigest},
         {"scheduleExit", "(I)V",                                         (void *) scheduleExit}
 };
 
@@ -458,89 +470,140 @@ PARALLAX_ENCRYPT jobject replaceApplicationOnLoadedApk(JNIEnv *env, jclass __unu
 
 PARALLAX_ENCRYPT static bool registerNativeMethods(JNIEnv *env) {
     jclass JniBridgeClass = env->FindClass(g_shell_config.jni_class_name.c_str());
-    if(JniBridgeClass == nullptr) {
-        DLOGF("cannot find class: %s!", g_shell_config.jni_class_name.c_str());
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return JNI_FALSE;
     }
-    if (env->RegisterNatives(JniBridgeClass, gMethods, sizeof(gMethods) / sizeof(gMethods[0])) ==
-        0) {
-        return JNI_TRUE;
+    if (JniBridgeClass == nullptr) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return JNI_FALSE;
     }
-    return JNI_FALSE;
+
+    const jint result = env->RegisterNatives(
+            JniBridgeClass, gMethods, sizeof(gMethods) / sizeof(gMethods[0]));
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return JNI_FALSE;
+    }
+    if (result != 0) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
 }
 
 
 PARALLAX_ENCRYPT void init_app(JNIEnv *env, jclass __unused) {
-    DLOGD("called!");
     clock_t start = clock();
-
     void *package_addr = nullptr;
     size_t package_size = 0;
     load_package(env, &package_addr, &package_size);
+    if (package_addr == nullptr || package_size == 0) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return;
+    }
 
-    if(!g_codeItemFileData.has_value()) {
-        auto entry_data = read_zip_file_entry(package_addr, package_size, AY_OBFUSCATE(CODE_ITEM_NAME_IN_ZIP));
-        if(entry_data.has_value()) {
-            g_codeItemFileData = std::move(entry_data);
+    if (!g_codeItemFileData.has_value()) {
+        auto entry_data = read_zip_file_entry(
+                package_addr, package_size, AY_OBFUSCATE(CODE_ITEM_NAME_IN_ZIP));
+        if (!entry_data.has_value()) {
+            reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+            unload_package(package_addr, package_size);
+            return;
         }
-        printTime("read codeitem data took =" , start);
+        g_codeItemFileData = std::move(entry_data);
+    }
 
-    }
-    else {
-        DLOGD("no need read codeitem from zip");
-    }
     auto [entry_data, entry_size] = g_codeItemFileData.value();
-    readCodeItem((uint8_t *)entry_data, entry_size);
+    readCodeItem(static_cast<uint8_t *>(entry_data), entry_size);
+    if ((getSecurityRiskState() & PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT) != 0) {
+        unload_package(package_addr, package_size);
+        return;
+    }
 
     pthread_mutex_lock(&g_write_dexes_mutex);
     if (android_get_device_api_level() >= 26) {
         loadDexesToMemory(package_addr, package_size);
+        if (getInMemoryDexFiles().empty()) {
+            reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        }
     } else {
         extractDexesInNeeded(env, package_addr, package_size);
+        char dexPath[256] = {0};
+        getCompressedDexesPath(env, dexPath, ARRAY_LENGTH(dexPath));
+        struct stat st{};
+        if (dexPath[0] == '\0' || stat(dexPath, &st) != 0 || st.st_size <= 0) {
+            reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        }
     }
     pthread_mutex_unlock(&g_write_dexes_mutex);
 
     unload_package(package_addr, package_size);
-    printTime("read package data took =" , start);
+    printTime("read package data took =", start);
 }
 
-PARALLAX_ENCRYPT void readCodeItem(uint8_t *data,size_t data_len) {
+PARALLAX_ENCRYPT void readCodeItem(uint8_t *data, size_t data_len) {
+    if (data == nullptr || data_len < 12) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return;
+    }
 
-    if (data != nullptr && data_len >= 0) {
-        data::MultiDexCode *dexCode = data::MultiDexCode::getInst();
+    data::MultiDexCode *dexCode = data::MultiDexCode::getInst();
+    dexCode->init(data, data_len);
+    if (dexCode->readVersion() != 2) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return;
+    }
 
-        dexCode->init(data, data_len);
-        DLOGI("version = %d, dexCount = %d", dexCode->readVersion(),
-              dexCode->readDexCount());
-        int indexCount = 0;
-        uint32_t *dexCodeIndex = dexCode->readDexCodeIndex(&indexCount);
-        dexMap.reserve(indexCount);
-        for (int i = 0; i < indexCount; i++) {
-            DLOGI("dexCodeIndex[%d] = %d", i, *(dexCodeIndex + i));
-            uint32_t dexCodeOffset = *(dexCodeIndex + i);
-            uint16_t methodCount = dexCode->readUInt16(dexCodeOffset);
+    int indexCount = 0;
+    uint32_t *dexCodeIndex = dexCode->readDexCodeIndex(&indexCount);
+    if (dexCodeIndex == nullptr || indexCount <= 0 || indexCount > 256) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return;
+    }
 
-            DLOGD("dexCodeOffset[%d] = %d, methodCount[%d] = %d", i, dexCodeOffset, i,
-                  methodCount);
-            auto codeItemVec = new std::vector<data::CodeItem *>(65536);
-            uint32_t codeItemIndex = dexCodeOffset + 2;
-            for (int k = 0; k < methodCount; k++) {
-                data::CodeItem *codeItem = dexCode->nextCodeItem(&codeItemIndex);
-                uint32_t methodIdx = codeItem->getMethodIdx();
-                codeItemVec->at(methodIdx) = codeItem;
+    dexMap.reserve(static_cast<size_t>(indexCount));
+    for (int i = 0; i < indexCount; i++) {
+        const uint32_t dexCodeOffset = *(dexCodeIndex + i);
+        const uint16_t methodCount = dexCode->readUInt16(dexCodeOffset);
+        auto codeItemVec = std::make_unique<std::vector<data::CodeItem *>>(65536, nullptr);
+        uint32_t codeItemIndex = dexCodeOffset + 2;
+
+        for (int k = 0; k < methodCount; k++) {
+            data::CodeItem *codeItem = dexCode->nextCodeItem(&codeItemIndex);
+            if (codeItem == nullptr
+                    || codeItem->getInsnsSize() == 0
+                    || codeItem->getMethodIdx() >= codeItemVec->size()
+                    || codeItemVec->at(codeItem->getMethodIdx()) != nullptr) {
+                delete codeItem;
+                reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+                return;
             }
-            dexMap.emplace(i, codeItemVec);
-
+            codeItemVec->at(codeItem->getMethodIdx()) = codeItem;
         }
-        DLOGD("map size = %lu", (unsigned long)dexMap.size());
+
+        auto inserted = dexMap.emplace(i, codeItemVec.get());
+        if (!inserted.second) {
+            reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+            return;
+        }
+        (void) codeItemVec.release();
     }
 }
 
-PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
+PARALLAX_ENCRYPT bool read_shell_config(JNIEnv *env) {
+    bool loaded = false;
     void *package_addr = nullptr;
     size_t package_size = 0;
     load_package(env, &package_addr, &package_size);
+    if (package_addr == nullptr || package_size == 0) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return false;
+    }
 
-    auto entry = read_zip_file_entry(package_addr, package_size , AY_OBFUSCATE(SHELL_CONFIG_IN_ZIP));
+    auto entry = read_zip_file_entry(package_addr, package_size, AY_OBFUSCATE(SHELL_CONFIG_IN_ZIP));
     if(entry.has_value()) {
         auto [entry_data, entry_size] = entry.value();
         std::unique_ptr<uint8_t[]> entry_guard(entry_data);
@@ -550,7 +613,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
             if (mBoundApplicationObj == nullptr) {
                 DLOGE("bound application is null");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             reflect::android_app_ActivityThread::AppBindData appBindData(env, mBoundApplicationObj);
@@ -558,7 +621,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
             if (appInfoObj == nullptr) {
                 DLOGE("app info is null");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             reflect::android_content_pm_ApplicationInfo applicationInfo(env, appInfoObj);
@@ -566,7 +629,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
             if (packageNameJstr == nullptr) {
                 DLOGE("package name is null");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             const char *packageNameChs = env->GetStringUTFChars(packageNameJstr, nullptr);
@@ -576,24 +639,22 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
                     env->ReleaseStringUTFChars(packageNameJstr, packageNameChs);
                 }
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             std::string packageName(packageNameChs);
             env->ReleaseStringUTFChars(packageNameJstr, packageNameChs);
-            const char *buildKey = AY_OBFUSCATE(PARALLAX_BUILD_KEY);
-            const char *keySep = AY_OBFUSCATE("_");
-            std::string key_material = packageName + keySep + buildKey;
-            DLOGD("key material for config key: %s", key_material.c_str());
+            const char *keyPrefix = AY_OBFUSCATE("Parallax/config/master/v2/");
+            std::string key_material = std::string(keyPrefix) + packageName;
 
-            auto aes_key = hmac_sha256(PARALLAX_UNKNOWN_DATA,
+            auto aes_key = hmac_sha256(g_parallax_crypto_meta.master_key,
                                        16,
                                        reinterpret_cast<const uint8_t *>(key_material.data()),
                                        key_material.size());
             if (aes_key.size() != 32) {
                 DLOGE("derive config aes key failed");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             constexpr size_t CONFIG_HEADER_SIZE = 4;
@@ -603,7 +664,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
                 !constant_time_equal(entry_data, config_magic, CONFIG_HEADER_SIZE)) {
                 DLOGE("invalid Parallax config envelope");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             auto encryption_key = hmac_sha256(aes_key.data(), aes_key.size(),
@@ -617,14 +678,14 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
                 !constant_time_equal(expected_tag.data(), entry_data + authenticated_size, CONFIG_TAG_SIZE)) {
                 DLOGE("Parallax config checksum verification failed");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             std::vector<uint8_t> indata(entry_data + CONFIG_HEADER_SIZE,
                                         entry_data + authenticated_size);
 
             uint8_t iv[16] = {0};
-            memcpy(iv, PARALLAX_UNKNOWN_DATA, 16);
+            memcpy(iv, g_parallax_crypto_meta.master_key, 16);
             iv[3] = 0x2f;
             iv[9] = 0x76;
             auto decrypted_data = aes_cbc_decrypt(encryption_key.data(), 256, iv,
@@ -632,13 +693,11 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
             if (decrypted_data.empty()) {
                 DLOGE("decrypt shell config failed");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             try {
                 std::string jsonStr = std::string(decrypted_data.begin(), decrypted_data.end());
-                DLOGD("raw config: '%s'", jsonStr.c_str());
-
                 nlohmann::json shell_config = nlohmann::json::parse(jsonStr);
                 const char *keyAppName = AY_OBFUSCATE("app_name");
                 const char *keyAcfName = AY_OBFUSCATE("acf_name");
@@ -655,22 +714,58 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
                 g_shell_config.insns_xor_key = shell_config.value(keyInsnsXorKey, 0);
                 g_shell_config.risk_check_flags = shell_config.value(keyRiskCheckFlags, 0);
 
-                DLOGD("application_name = %s", g_shell_config.application_name.c_str());
-                DLOGD("application_component_factory = %s", g_shell_config.application_component_factory.c_str());
-                DLOGD("jni_class_name = %s", g_shell_config.jni_class_name.c_str());
-                DLOGD("app_sign_sha256 = %s", g_shell_config.app_sign_sha256.c_str());
-                DLOGD("dex_sign = %s", g_shell_config.dex_sign.c_str());
-                DLOGD("insns_xor_key = 0x%x", g_shell_config.insns_xor_key);
-                DLOGD("risk_check_flags = 0x%x", g_shell_config.risk_check_flags);
+                if (g_shell_config.jni_class_name.empty()
+                        || g_shell_config.app_sign_sha256.size() != 64
+                        || g_shell_config.dex_sign.empty()
+                        || g_shell_config.insns_xor_key == 0
+                        || g_shell_config.risk_check_flags != 0) {
+                    throw std::runtime_error("mandatory ultra protection config is invalid");
+                }
+                loaded = true;
             } catch (const std::exception &e) {
                 DLOGE("parse shell config failed: %s", e.what());
+                reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+                loaded = false;
             }
+            secure_zero(decrypted_data.data(), decrypted_data.size());
+            secure_zero(aes_key.data(), aes_key.size());
+            secure_zero(encryption_key.data(), encryption_key.size());
+            secure_zero(authentication_key.data(), authentication_key.size());
+            secure_zero(expected_tag.data(), expected_tag.size());
         }
     }
 
     unload_package(package_addr, package_size);
+    if (!loaded) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+    }
+    return loaded;
 }
 
+
+
+PARALLAX_ENCRYPT jboolean verifySourceSignerDigest(
+        JNIEnv *env, jclass, jstring digest) {
+    if (digest == nullptr || g_shell_config.app_sign_sha256.size() != 64) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return JNI_FALSE;
+    }
+    const char *actual = env->GetStringUTFChars(digest, nullptr);
+    if (actual == nullptr) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return JNI_FALSE;
+    }
+    const size_t actualLength = strlen(actual);
+    const bool matches = actualLength == 64
+            && parallax_strncasecmp(
+                    actual, g_shell_config.app_sign_sha256.c_str(), 64) == 0;
+    env->ReleaseStringUTFChars(digest, actual);
+    if (!matches) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
+}
 
 void veritySignature(JNIEnv *env) {
     if (!g_shell_config.app_sign_sha256.empty()) {
@@ -688,7 +783,10 @@ PARALLAX_ENCRYPT JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *) {
         return JNI_ERR;
     }
 
-    read_shell_config(env);
+    if (!read_shell_config(env)) {
+        DLOGF("authenticated protection config load failed");
+        return JNI_ERR;
+    }
 
     antiRisk();
 

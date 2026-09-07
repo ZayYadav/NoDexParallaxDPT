@@ -33,7 +33,7 @@ public class ConfigKeyDerivationTest {
         randomKey[9] = 0x74;
 
         String packageName = "com.example.app";
-        String keyMaterial = packageName + "_" + "a1b2c3d4e5f67890";
+        String keyMaterial = "Parallax/config/master/v2/" + packageName;
         byte[] aesKey = CryptoUtils.hmacSha256(randomKey, keyMaterial);
         Assert.assertEquals(32, aesKey.length);
 
@@ -72,10 +72,20 @@ public class ConfigKeyDerivationTest {
     }
 
     @Test
-    public void testGetBuildKeyWithoutJarManifest() {
-        // Without shell-files/build-key, unit tests usually fall back to jar manifest (often absent).
-        String buildKey = Parallax.getBuildKey();
-        Assert.assertTrue(buildKey == null || !buildKey.isEmpty());
+    public void testConfigKeyIsPerApkMasterAndPackageBound() {
+        byte[] perApkMaster = new byte[16];
+        for (int i = 0; i < perApkMaster.length; i++) {
+            perApkMaster[i] = (byte) (0x41 + i);
+        }
+
+        byte[] first = CryptoUtils.hmacSha256(
+                perApkMaster, "Parallax/config/master/v2/com.example.one");
+        byte[] second = CryptoUtils.hmacSha256(
+                perApkMaster, "Parallax/config/master/v2/com.example.two");
+
+        Assert.assertEquals(32, first.length);
+        Assert.assertEquals(32, second.length);
+        Assert.assertFalse(java.util.Arrays.equals(first, second));
     }
 
     private static byte[] hexToBytes(String hex) {

@@ -16,6 +16,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
@@ -33,6 +34,90 @@ import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 public class ZipUtils {
+    private static final int MAX_ARCHIVE_ENTRIES = 50_000;
+    private static final long MAX_SINGLE_ENTRY_BYTES = 512L * 1024L * 1024L;
+    private static final long MAX_TOTAL_EXTRACTED_BYTES = 4L * 1024L * 1024L * 1024L;
+    private static final int COPY_BUFFER_SIZE = 32 * 1024;
+
+    private static File resolveArchiveEntry(File root, String rawName) throws IOException {
+        if (root == null || rawName == null || rawName.indexOf('\0') >= 0) {
+            throw new IOException("invalid archive entry");
+        }
+        String normalizedName = rawName.replace('\\', '/');
+        while (normalizedName.startsWith("./")) {
+            normalizedName = normalizedName.substring(2);
+        }
+        if (normalizedName.isEmpty()
+                || normalizedName.startsWith("/")
+                || normalizedName.matches("^[A-Za-z]:.*")) {
+            throw new IOException("unsafe archive entry: " + rawName);
+        }
+
+        Path rootPath = root.getCanonicalFile().toPath().normalize();
+        Path targetPath = rootPath.resolve(normalizedName).normalize();
+        if (!targetPath.startsWith(rootPath)) {
+            throw new IOException("archive path traversal blocked: " + rawName);
+        }
+
+        Path parent = targetPath.getParent();
+        if (parent != null) {
+            Path current = rootPath;
+            Path relative = rootPath.relativize(parent);
+            for (Path part : relative) {
+                current = current.resolve(part);
+                if (Files.exists(current) && Files.isSymbolicLink(current)) {
+                    throw new IOException("archive symlink traversal blocked: " + rawName);
+                }
+            }
+        }
+        return targetPath.toFile();
+    }
+
+    private static void ensureEntryLimits(ZipEntry entry, int entryCount) throws IOException {
+        if (entryCount > MAX_ARCHIVE_ENTRIES) {
+            throw new IOException("archive contains too many entries");
+        }
+        long declared = entry.getSize();
+        if (declared > MAX_SINGLE_ENTRY_BYTES) {
+            throw new IOException("archive entry too large: " + entry.getName());
+        }
+    }
+
+    private static void copyEntryBounded(InputStream input, File target, long[] totalBytes)
+            throws IOException {
+        File parent = target.getParentFile();
+        if (parent == null) {
+            throw new IOException("archive entry has no parent");
+        }
+        if (!parent.exists() && !parent.mkdirs() && !parent.isDirectory()) {
+            throw new IOException("cannot create archive output directory");
+        }
+
+        long entryBytes = 0L;
+        boolean complete = false;
+        try (FileOutputStream output = new FileOutputStream(target, false)) {
+            byte[] buffer = new byte[COPY_BUFFER_SIZE];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                entryBytes += read;
+                totalBytes[0] += read;
+                if (entryBytes > MAX_SINGLE_ENTRY_BYTES) {
+                    throw new IOException("archive entry exceeded size limit: " + target.getName());
+                }
+                if (totalBytes[0] > MAX_TOTAL_EXTRACTED_BYTES) {
+                    throw new IOException("archive exceeded total extraction limit");
+                }
+                output.write(buffer, 0, read);
+            }
+            output.flush();
+            output.getFD().sync();
+            complete = true;
+        } finally {
+            if (!complete) {
+                Files.deleteIfExists(target.toPath());
+            }
+        }
+    }
     private static final List<String> defaultStoreList = Arrays.asList(
             "assets/" + Const.KEY_SHELL_CONFIG_STORE_NAME,
             "assets/" + Const.KEY_DEXES_STORE_NAME,
@@ -108,7 +193,7 @@ public class ZipUtils {
                 out.write(b, 0, len);
             }
         } catch (IOException e) {
-            e.printStackTrace();
+            throw e;
         }
     }
 
@@ -179,50 +264,34 @@ public class ZipUtils {
             }
 
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new IllegalStateException("APK compression failed closed", e);
         } finally {
             IoUtils.close(zipFile);
         }
     }
 
-    private static void writeZipEntry(ZipInputStream zipInputStream, String targetFilePath) {
-        FileOutputStream fos = null;
-        try {
-            File targetFile = new File(targetFilePath);
-            if (!targetFile.getParentFile()
-                           .exists()) {
-                targetFile.getParentFile()
-                          .mkdirs();
-            }
-            fos = new FileOutputStream(targetFile);
-            int len = 0;
-            byte[] buf = new byte[1024];
-            while ((len = zipInputStream.read(buf)) != -1) {
-                fos.write(buf, 0, len);
-            }
-        } catch (IOException e) {
-            LogUtils.error("writeZipEntry err = %s", e);
-        } finally {
-            IoUtils.close(fos);
-        }
-    }
 
     /**
      * Unzip apk
      */
     public static void extractAPK(String zipFilePath, String destDir) {
-        ZipInputStream zipInputStream = null;
+        File root = new File(destDir);
+        if (!root.exists() && !root.mkdirs() && !root.isDirectory()) {
+            throw new IllegalStateException("cannot create APK extraction directory");
+        }
         Map<String, Integer> zipEntryNameMap = new HashMap<>();
-        try {
-            zipInputStream = new ZipInputStream(new FileInputStream(zipFilePath));
-            ZipEntry zipEntry = null;
+        long[] totalBytes = {0L};
+        int entryCount = 0;
 
+        try (ZipInputStream zipInputStream = new ZipInputStream(new FileInputStream(zipFilePath))) {
+            ZipEntry zipEntry;
             while ((zipEntry = zipInputStream.getNextEntry()) != null) {
+                entryCount++;
+                ensureEntryLimits(zipEntry, entryCount);
 
                 String zipEntryName = zipEntry.getName();
-
-                CompressionMethod compressionMethod = CompressionMethod.getCompressionMethodFromCode(zipEntry.getMethod());
-
+                CompressionMethod compressionMethod =
+                        CompressionMethod.getCompressionMethodFromCode(zipEntry.getMethod());
                 compressedLevelMap.put(zipEntryName, compressionMethod);
 
                 String lowerCase = zipEntryName.toLowerCase(Locale.US);
@@ -234,13 +303,19 @@ public class ZipUtils {
                 } else {
                     zipEntryNameMap.put(lowerCase, 0);
                 }
-                writeZipEntry(zipInputStream, destDir + File.separator + finalFileName);
 
+                File target = resolveArchiveEntry(root, finalFileName);
+                if (zipEntry.isDirectory()) {
+                    if (!target.exists() && !target.mkdirs() && !target.isDirectory()) {
+                        throw new IOException("cannot create archive directory: " + finalFileName);
+                    }
+                } else {
+                    copyEntryBounded(zipInputStream, target, totalBytes);
+                }
+                zipInputStream.closeEntry();
             }
         } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            IoUtils.close(zipInputStream);
+            throw new IllegalStateException("APK extraction failed closed", e);
         }
     }
 
@@ -248,15 +323,23 @@ public class ZipUtils {
      * Unzip a file
      */
     public static void extractFile(String zipFilePath, String fileName, String destDir) {
-        ZipFile zipFile = null;
-        try {
-            zipFile = new ZipFile(zipFilePath);
-            FileHeader fileHeader = zipFile.getFileHeader(fileName);
-            zipFile.extractFile(fileHeader, destDir);
-        } catch (ZipException e) {
-            e.printStackTrace();
-        } finally {
-            IoUtils.close(zipFile);
+        File root = new File(destDir);
+        if (!root.exists() && !root.mkdirs() && !root.isDirectory()) {
+            throw new IllegalStateException("cannot create single-entry extraction directory");
+        }
+        try (java.util.zip.ZipFile zipFile = new java.util.zip.ZipFile(zipFilePath)) {
+            ZipEntry entry = zipFile.getEntry(fileName);
+            if (entry == null || entry.isDirectory()) {
+                throw new IOException("requested archive entry is missing or not a file");
+            }
+            ensureEntryLimits(entry, 1);
+            File target = resolveArchiveEntry(root, entry.getName());
+            long[] totalBytes = {0L};
+            try (InputStream input = zipFile.getInputStream(entry)) {
+                copyEntryBounded(input, target, totalBytes);
+            }
+        } catch (Exception e) {
+            throw new IllegalStateException("single-entry extraction failed closed", e);
         }
     }
 
@@ -288,7 +371,7 @@ public class ZipUtils {
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new IllegalStateException("ZIP compression failed closed", e);
         } finally {
             IoUtils.close(zipFile);
         }
@@ -301,59 +384,71 @@ public class ZipUtils {
      * @param dirPath unzip dir path
      */
     public static void unZip(String zipPath, String dirPath) {
-        java.util.zip.ZipFile zipFile = null;
-        try {
-            File zip = new File(zipPath);
-            File dir = new File(dirPath);
-            if (dir.exists()) {
-                FileUtils.deleteRecurse(dir);
-            }
-            zipFile = new java.util.zip.ZipFile(zip);
+        File zip = new File(zipPath);
+        File dir = new File(dirPath);
+        if (dir.exists()) {
+            FileUtils.deleteRecurse(dir);
+        }
+        if (!dir.exists() && !dir.mkdirs() && !dir.isDirectory()) {
+            throw new IllegalStateException("cannot create unzip directory");
+        }
+
+        long[] totalBytes = {0L};
+        int entryCount = 0;
+        try (java.util.zip.ZipFile zipFile = new java.util.zip.ZipFile(zip)) {
             Enumeration<? extends ZipEntry> entries = zipFile.entries();
             while (entries.hasMoreElements()) {
                 ZipEntry zipEntry = entries.nextElement();
+                entryCount++;
+                ensureEntryLimits(zipEntry, entryCount);
+
                 String name = zipEntry.getName();
                 if (name.startsWith("META-INF/") && isSignatureMetaInfFile(name)) {
                     continue;
                 }
-                if (!zipEntry.isDirectory()) {
-                    File file = new File(dir, name);
-                    if (file.exists()) {
-                        String fileName = file.getName();
-                        int count = 1;
-                        for (String v : resConflictFiles.values()) {
-                            if (v.equalsIgnoreCase(fileName)) {
-                                count++;
-                            }
-                        }
-                        String rename;
-                        do {
-                            rename = count + fileName;
-                            file = new File(file.getParentFile(), rename);
+
+                File file = resolveArchiveEntry(dir, name);
+                if (zipEntry.isDirectory()) {
+                    if (!file.exists() && !file.mkdirs() && !file.isDirectory()) {
+                        throw new IOException("cannot create archive directory: " + name);
+                    }
+                    continue;
+                }
+
+                if (file.exists()) {
+                    String fileName = file.getName();
+                    int count = 1;
+                    for (String v : resConflictFiles.values()) {
+                        if (v.equalsIgnoreCase(fileName)) {
                             count++;
-                        } while (file.exists());
-                        resConflictFiles.put(rename, fileName);
-                    }
-                    if (!file.getParentFile().exists()) {
-                        file.getParentFile().mkdirs();
-                    }
-                    if (zipEntry.getCompressedSize() == zipEntry.getSize()) {
-                        doNotCompress.add(file.getAbsolutePath().replace(dir.getAbsolutePath() + File.separator, ""));
-                    }
-                    try (FileOutputStream fos = new FileOutputStream(file);
-                         InputStream is = zipFile.getInputStream(zipEntry)) {
-                        byte[] buffer = new byte[1024];
-                        int len;
-                        while ((len = is.read(buffer)) != -1) {
-                            fos.write(buffer, 0, len);
                         }
                     }
+                    String rename;
+                    do {
+                        rename = count + fileName;
+                        Path rootPath = dir.getCanonicalFile().toPath();
+                        Path parentPath = file.getParentFile().getCanonicalFile().toPath();
+                        String parentRelative = rootPath.relativize(parentPath).toString();
+                        String candidate = parentRelative.isEmpty()
+                                ? rename
+                                : parentRelative + File.separator + rename;
+                        file = resolveArchiveEntry(dir, candidate);
+                        count++;
+                    } while (file.exists());
+                    resConflictFiles.put(rename, fileName);
+                }
+
+                if (zipEntry.getCompressedSize() == zipEntry.getSize()) {
+                    doNotCompress.add(file.getAbsolutePath()
+                            .replace(dir.getAbsolutePath() + File.separator, ""));
+                }
+
+                try (InputStream is = zipFile.getInputStream(zipEntry)) {
+                    copyEntryBounded(is, file, totalBytes);
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            IoUtils.close(zipFile);
+            throw new IllegalStateException("archive extraction failed closed", e);
         }
     }
 
@@ -393,7 +488,7 @@ public class ZipUtils {
             compress(dir, zos, "", doNotCompress, resConflictFiles, recompressNativeLibraries);
             zos.flush();
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new IllegalStateException("ZIP creation failed closed", e);
         } finally {
             IoUtils.close(zos);
         }

@@ -25,7 +25,6 @@
 #include "common/parallax_log.h"
 #include "common/parallax_macro.h"
 #include "common/obfuscate.h"
-#include "rc4/rc4.h"
 #include "parallax_hook.h"
 #include "dex/MultiDexCode.h"
 #include "dex/CodeItem.h"
@@ -59,6 +58,7 @@ void callRealApplicationOnCreate(JNIEnv *env, jclass, jstring realApplicationCla
 
 void init_app(JNIEnv* env,jclass __unused);
 void readCodeItem(uint8_t *data,size_t data_len);
+bool read_shell_config(JNIEnv *env);
 jstring readAppComponentFactory(JNIEnv *env,jclass __unused);
 jstring readApplicationName(JNIEnv *env, jclass __unused);
 jobjectArray makePathElements(JNIEnv* env,const char *pathChs);
@@ -70,6 +70,7 @@ void replaceApplicationOnActivityThread(JNIEnv *env,jclass __unused, jobject rea
 jobject replaceApplicationOnLoadedApk(JNIEnv *env, jclass __unused, jstring realApplicationClassName);
 
 void veritySignature(JNIEnv *env);
+jboolean verifySourceSignerDigest(JNIEnv *env, jclass, jstring digest);
 
 void clinit(__unused JNIEnv *env, __unused jclass);
 

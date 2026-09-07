@@ -1,4 +1,5 @@
 #include "parallax.h"
+#include "parallax_crypto.h"
 #include "parallax_hook.h"
 #include "parallax_util.h"
 
@@ -6,8 +7,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <sys/mman.h>
-
-extern uint8_t PARALLAX_UNKNOWN_DATA[];
+#include <vector>
 
 namespace {
 
@@ -40,32 +40,71 @@ bool decryptRuntimeBitcode() {
         return false;
     }
 
-    // sh_addr is the runtime virtual offset for an ET_DYN shared object. sh_offset is
-    // only a file offset and is not guaranteed to remain equal after linker/layout changes.
     auto *target = reinterpret_cast<uint8_t *>(info.dli_fbase) + section.sh_addr;
     const size_t size = static_cast<size_t>(section.sh_size);
 
-    // W^X: never request writable + executable memory at the same time. Modern Android
-    // and hardened OEM kernels may reject RWX even for a private app mapping.
+    // Authenticate while the code mapping is still RX. Writable permission is only
+    // requested after ciphertext integrity has been established.
+    const char *authLabel = "Parallax/bitcode/authentication/v2";
+    auto authenticationKey = hmac_sha256(
+            g_parallax_crypto_meta.master_key,
+            sizeof(g_parallax_crypto_meta.master_key),
+            reinterpret_cast<const uint8_t *>(authLabel),
+            strlen(authLabel));
+    if (authenticationKey.size() != 32) {
+        return false;
+    }
+
+    std::vector<uint8_t> authenticated(sizeof(g_parallax_crypto_meta.bitcode_nonce) + size);
+    memcpy(authenticated.data(),
+           g_parallax_crypto_meta.bitcode_nonce,
+           sizeof(g_parallax_crypto_meta.bitcode_nonce));
+    memcpy(authenticated.data() + sizeof(g_parallax_crypto_meta.bitcode_nonce),
+           target, size);
+
+    auto expectedTag = hmac_sha256(authenticationKey.data(), authenticationKey.size(),
+                                   authenticated.data(), authenticated.size());
+    secure_zero(authenticationKey.data(), authenticationKey.size());
+    secure_zero(authenticated.data(), authenticated.size());
+
+    if (expectedTag.size() != sizeof(g_parallax_crypto_meta.bitcode_tag)
+            || !constant_time_equal(expectedTag.data(),
+                                    g_parallax_crypto_meta.bitcode_tag,
+                                    sizeof(g_parallax_crypto_meta.bitcode_tag))) {
+        secure_zero(expectedTag.data(), expectedTag.size());
+        return false;
+    }
+    secure_zero(expectedTag.data(), expectedTag.size());
+
+    const char *encLabel = "Parallax/bitcode/encryption/v2";
+    auto encryptionKey = hmac_sha256(
+            g_parallax_crypto_meta.master_key,
+            sizeof(g_parallax_crypto_meta.master_key),
+            reinterpret_cast<const uint8_t *>(encLabel),
+            strlen(encLabel));
+    if (encryptionKey.size() != 32) {
+        return false;
+    }
+
+    auto plain = aes_ctr_crypt(encryptionKey.data(), 256,
+                               g_parallax_crypto_meta.bitcode_nonce,
+                               target, size);
+    secure_zero(encryptionKey.data(), encryptionKey.size());
+    if (plain.size() != size) {
+        secure_zero(plain.data(), plain.size());
+        return false;
+    }
+
+    // W^X: never create an RWX mapping. The authenticated plaintext is copied only
+    // during a short RW window and immediately restored to RX.
     if (parallax_mprotect(target, target + size, PROT_READ | PROT_WRITE) != 0) {
+        secure_zero(plain.data(), plain.size());
         return false;
     }
 
-    auto *plain = static_cast<uint8_t *>(malloc(size));
-    if (plain == nullptr) {
-        parallax_mprotect(target, target + size, PROT_READ | PROT_EXEC);
-        return false;
-    }
+    memcpy(target, plain.data(), size);
+    secure_zero(plain.data(), plain.size());
 
-    rc4_state state{};
-    rc4_init(&state, reinterpret_cast<const u_char *>(PARALLAX_UNKNOWN_DATA), 16);
-    rc4_crypt(&state, reinterpret_cast<const u_char *>(target),
-              reinterpret_cast<u_char *>(plain), size);
-    memcpy(target, plain, size);
-    free(plain);
-
-    // ARM has separate data/instruction caches. Explicitly invalidate the instruction
-    // cache after rewriting executable bytes, before the section can be executed.
     __builtin___clear_cache(reinterpret_cast<char *>(target),
                             reinterpret_cast<char *>(target + size));
 
@@ -76,11 +115,9 @@ bool decryptRuntimeBitcode() {
     return true;
 }
 
-// Priority 101 is the earliest application-defined constructor priority. Decrypt before
-// the default-priority hardening/runtime constructors can enter protected helper code.
+// Priority 101 is the earliest application-defined constructor priority. The authenticated
+// native runtime is restored before default-priority protection constructors or JNI_OnLoad.
 __attribute__((constructor(101))) void parallaxBootstrapInit() {
-    // JNI_OnLoad and the DEX restoration routines live in the encrypted .bitcode section,
-    // so decryption must complete before the dynamic linker can enter JNI_OnLoad.
     if (!decryptRuntimeBitcode()) {
         abort();
     }

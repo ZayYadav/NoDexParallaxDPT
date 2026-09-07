@@ -16,10 +16,8 @@
 #include "parallax_crypto.h"
 #include "parallax_risk.h"
 
-extern uint8_t PARALLAX_UNKNOWN_DATA[];
 
 namespace {
-constexpr uint8_t CODE_ITEM_MAGIC_V2[] = {'P', 'C', 'I', '2'};
 constexpr uint8_t CODE_ITEM_MAGIC_V3[] = {'P', 'C', 'I', '3'};
 constexpr size_t CODE_ITEM_MAGIC_SIZE = sizeof(CODE_ITEM_MAGIC_V3);
 constexpr size_t CODE_ITEM_LENGTH_SIZE = 4;
@@ -35,20 +33,10 @@ bool hasMagic(const uint8_t *buffer, size_t size, const uint8_t magic[CODE_ITEM_
            && memcmp(buffer, magic, CODE_ITEM_MAGIC_SIZE) == 0;
 }
 
-bool isLegacySealedCodeItem(const uint8_t *buffer, size_t size) {
-    return size > CODE_ITEM_MAGIC_SIZE + CODE_ITEM_NONCE_SIZE + CODE_ITEM_GCM_TAG_SIZE
-           && hasMagic(buffer, size, CODE_ITEM_MAGIC_V2);
-}
-
 bool isCompressedSealedCodeItem(const uint8_t *buffer, size_t size) {
     return size > CODE_ITEM_MAGIC_SIZE + CODE_ITEM_LENGTH_SIZE
                   + CODE_ITEM_NONCE_SIZE + CODE_ITEM_GCM_TAG_SIZE
            && hasMagic(buffer, size, CODE_ITEM_MAGIC_V3);
-}
-
-bool isSealedCodeItem(const uint8_t *buffer, size_t size) {
-    return isCompressedSealedCodeItem(buffer, size)
-           || isLegacySealedCodeItem(buffer, size);
 }
 
 uint32_t readBigEndianU32(const uint8_t *data) {
@@ -205,34 +193,32 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
     m_source_buffer = buffer;
     m_source_size = size;
 
-    // Release builds accept authenticated PCI3 (compressed-before-encryption) and PCI2
-    // for compatibility with already-protected packages. Raw/plain sidecars fail closed.
-    if (!isSealedCodeItem(buffer, size)) {
+    // Ultra release accepts only PCI3: compressed + AES-GCM authenticated. Older PCI2
+    // envelopes are deliberately rejected to prevent a protection downgrade.
 #ifdef DEBUG
+    if (!isCompressedSealedCodeItem(buffer, size)) {
         DLOGW("debug build accepted legacy plaintext code-item payload");
         m_buffer = buffer;
         m_size = size;
         return;
+    }
 #else
-        DLOGE("missing PCI3/PCI2 protected code-item envelope");
+    if (!isCompressedSealedCodeItem(buffer, size)) {
+        DLOGE("PCI3 protected method-vault envelope required");
         reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
         m_buffer = const_cast<uint8_t *>(INVALID_CODE_ITEM_BUFFER);
         m_size = sizeof(INVALID_CODE_ITEM_BUFFER);
         return;
-#endif
     }
+#endif
 
-    const bool compressedV3 = isCompressedSealedCodeItem(buffer, size);
-    const char *buildKey = AY_OBFUSCATE(PARALLAX_BUILD_KEY);
-    const char *keyPrefix = compressedV3
-            ? AY_OBFUSCATE("Parallax/codeitem/encryption/v3/")
-            : AY_OBFUSCATE("Parallax/codeitem/encryption/v2/");
-    std::string keyMaterial = std::string(keyPrefix) + buildKey;
+    const bool compressedV3 = true;
+    const char *keyMaterial = AY_OBFUSCATE("Parallax/codeitem/encryption/v3");
     auto payloadKey = hmac_sha256(
-            PARALLAX_UNKNOWN_DATA,
+            g_parallax_crypto_meta.master_key,
             16,
-            reinterpret_cast<const uint8_t *>(keyMaterial.data()),
-            keyMaterial.size());
+            reinterpret_cast<const uint8_t *>(keyMaterial),
+            strlen(keyMaterial));
     if (payloadKey.size() != 32) {
         if (!payloadKey.empty()) {
             secure_zero(payloadKey.data(), payloadKey.size());
@@ -261,8 +247,6 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
         }
         aadString = std::string(AY_OBFUSCATE("Parallax/codeitem/payload/v3/"))
                     + std::to_string(originalPlaintextSize);
-    } else {
-        aadString = AY_OBFUSCATE("Parallax/codeitem/payload/v2");
     }
 
     if (payloadOffset + CODE_ITEM_NONCE_SIZE + CODE_ITEM_GCM_TAG_SIZE >= size) {
