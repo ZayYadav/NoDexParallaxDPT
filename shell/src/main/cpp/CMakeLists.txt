@@ -17,7 +17,6 @@ set(PARALLAX_NATIVE_SOURCE
         parallax_vm4_runtime.cpp
         parallax_vm_dispatch.cpp
         parallax_vm_exports.cpp
-        rc4/rc4.c
         common/parallax_string.c
         dex/dex_file.cpp
         dex/MultiDexCode.cpp
