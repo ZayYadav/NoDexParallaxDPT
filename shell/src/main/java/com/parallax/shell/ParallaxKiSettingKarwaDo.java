@@ -29,6 +29,7 @@ public final class ParallaxKiSettingKarwaDo extends Application
     private static final int SECURITY_RUNTIME_TAMPER = 1 << 5;
     private static final String ZIP_LIB_DIR = "ParallaxLoveU";
     private static final String SHELL_SO_NAME = BuildConfig.SO_NAME;
+    private static final long MAX_SHELL_LIBRARY_BYTES = 64L * 1024L * 1024L;
     private static final Object BOOTSTRAP_LOCK = new Object();
 
     private static volatile int flowNoise = 0x6D2B79F5;
@@ -106,38 +107,71 @@ public final class ParallaxKiSettingKarwaDo extends Application
 
     private static File extractShellLibrary(String sourceDir, String dataDir) {
         File outDir = new File(dataDir, "files");
-        if (!outDir.exists() && !outDir.mkdirs()) {
+        if (!outDir.exists() && !outDir.mkdirs() && !outDir.isDirectory()) {
             throw new IllegalStateException("cannot create shell directory");
         }
         File out = new File(outDir, SHELL_SO_NAME);
         File temp = new File(outDir, "." + SHELL_SO_NAME + "."
                 + android.os.Process.myPid() + "." + Thread.currentThread().getId() + ".tmp");
         String entryName = "assets/" + ZIP_LIB_DIR + "/" + abiDirName() + "/" + SHELL_SO_NAME;
+
         try (ZipFile zip = new ZipFile(sourceDir)) {
             ZipEntry entry = zip.getEntry(entryName);
-            if (entry == null) {
+            if (entry == null || entry.isDirectory()) {
                 throw new IllegalStateException("missing shell library for process ABI: " + abiDirName());
             }
+            long expected = entry.getSize();
+            if (expected <= 0 || expected > MAX_SHELL_LIBRARY_BYTES) {
+                throw new IllegalStateException("invalid shell library size");
+            }
+
+            long written = 0;
             try (InputStream in = zip.getInputStream(entry);
                  FileOutputStream output = new FileOutputStream(temp, false)) {
                 byte[] buffer = new byte[16384];
                 int read;
                 while ((read = in.read(buffer)) != -1) {
+                    written += read;
+                    if (written > expected || written > MAX_SHELL_LIBRARY_BYTES) {
+                        throw new IllegalStateException("shell library extraction exceeded declared size");
+                    }
                     output.write(buffer, 0, read);
                 }
                 output.flush();
                 output.getFD().sync();
             }
-            // Same-directory rename is atomic on Android/Linux. This avoids one process
-            // observing a partially-written library while another process is starting.
-            if (!temp.renameTo(out)) {
-                throw new IllegalStateException("cannot publish shell library atomically");
+            if (written != expected || temp.length() != expected) {
+                throw new IllegalStateException("shell library extraction size mismatch");
             }
+
+            android.system.Os.chmod(temp.getAbsolutePath(), 0400);
+            android.system.Os.rename(temp.getAbsolutePath(), out.getAbsolutePath());
+            android.system.Os.chmod(out.getAbsolutePath(), 0400);
             return out;
         } catch (Exception e) {
             throw new IllegalStateException("cannot extract shell library", e);
         } finally {
-            if (temp.exists()) temp.delete();
+            if (temp.exists()) {
+                try {
+                    android.system.Os.unlink(temp.getAbsolutePath());
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    private static void loadShellLibrary(String sourceDir, String dataDir) {
+        File shellLibrary = extractShellLibrary(sourceDir, dataDir);
+        try {
+            System.load(shellLibrary.getAbsolutePath());
+        } finally {
+            // The dynamic linker has mapped the library by the time System.load returns.
+            // Remove the reusable on-disk copy; mappings stay valid for this process.
+            try {
+                android.system.Os.unlink(shellLibrary.getAbsolutePath());
+            } catch (Exception e) {
+                throw new IllegalStateException("cannot unlink loaded shell library", e);
+            }
         }
     }
 
@@ -155,8 +189,7 @@ public final class ParallaxKiSettingKarwaDo extends Application
             if (classLoaderReady) return true;
 
             applicationPackageName = info.packageName;
-            File shellLibrary = extractShellLibrary(info.sourceDir, info.dataDir);
-            System.load(shellLibrary.getAbsolutePath());
+            loadShellLibrary(info.sourceDir, info.dataDir);
 
             // No Context exists yet in AppComponentFactory.instantiateClassLoader(). The
             // native check still validates the payload, root, tracer and hook state; the
@@ -189,8 +222,8 @@ public final class ParallaxKiSettingKarwaDo extends Application
                 case 0x22:
                     info = base.getApplicationInfo();
                     if (info == null) throw new IllegalStateException("application info is null");
-                    shellLibrary = extractShellLibrary(info.sourceDir, info.dataDir);
-                    System.load(shellLibrary.getAbsolutePath());
+                    loadShellLibrary(info.sourceDir, info.dataDir);
+                    shellLibrary = new File(info.dataDir, "files/" + SHELL_SO_NAME);
                     state = nextState(0x33, 0x73);
                     break;
                 case 0x33:
