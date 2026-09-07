@@ -481,68 +481,100 @@ PARALLAX_ENCRYPT static bool registerNativeMethods(JNIEnv *env) {
 
 
 PARALLAX_ENCRYPT void init_app(JNIEnv *env, jclass __unused) {
-    DLOGD("called!");
     clock_t start = clock();
-
     void *package_addr = nullptr;
     size_t package_size = 0;
     load_package(env, &package_addr, &package_size);
+    if (package_addr == nullptr || package_size == 0) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return;
+    }
 
-    if(!g_codeItemFileData.has_value()) {
-        auto entry_data = read_zip_file_entry(package_addr, package_size, AY_OBFUSCATE(CODE_ITEM_NAME_IN_ZIP));
-        if(entry_data.has_value()) {
-            g_codeItemFileData = std::move(entry_data);
+    if (!g_codeItemFileData.has_value()) {
+        auto entry_data = read_zip_file_entry(
+                package_addr, package_size, AY_OBFUSCATE(CODE_ITEM_NAME_IN_ZIP));
+        if (!entry_data.has_value()) {
+            reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+            unload_package(package_addr, package_size);
+            return;
         }
-        printTime("read codeitem data took =" , start);
+        g_codeItemFileData = std::move(entry_data);
+    }
 
-    }
-    else {
-        DLOGD("no need read codeitem from zip");
-    }
     auto [entry_data, entry_size] = g_codeItemFileData.value();
-    readCodeItem((uint8_t *)entry_data, entry_size);
+    readCodeItem(static_cast<uint8_t *>(entry_data), entry_size);
+    if ((getSecurityRiskState() & PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT) != 0) {
+        unload_package(package_addr, package_size);
+        return;
+    }
 
     pthread_mutex_lock(&g_write_dexes_mutex);
     if (android_get_device_api_level() >= 26) {
         loadDexesToMemory(package_addr, package_size);
+        if (getInMemoryDexFiles().empty()) {
+            reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        }
     } else {
         extractDexesInNeeded(env, package_addr, package_size);
+        char dexPath[256] = {0};
+        getCompressedDexesPath(env, dexPath, ARRAY_LENGTH(dexPath));
+        struct stat st{};
+        if (dexPath[0] == '\0' || stat(dexPath, &st) != 0 || st.st_size <= 0) {
+            reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        }
     }
     pthread_mutex_unlock(&g_write_dexes_mutex);
 
     unload_package(package_addr, package_size);
-    printTime("read package data took =" , start);
+    printTime("read package data took =", start);
 }
 
-PARALLAX_ENCRYPT void readCodeItem(uint8_t *data,size_t data_len) {
+PARALLAX_ENCRYPT void readCodeItem(uint8_t *data, size_t data_len) {
+    if (data == nullptr || data_len < 12) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return;
+    }
 
-    if (data != nullptr && data_len >= 0) {
-        data::MultiDexCode *dexCode = data::MultiDexCode::getInst();
+    data::MultiDexCode *dexCode = data::MultiDexCode::getInst();
+    dexCode->init(data, data_len);
+    if (dexCode->readVersion() != 2) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return;
+    }
 
-        dexCode->init(data, data_len);
-        DLOGI("version = %d, dexCount = %d", dexCode->readVersion(),
-              dexCode->readDexCount());
-        int indexCount = 0;
-        uint32_t *dexCodeIndex = dexCode->readDexCodeIndex(&indexCount);
-        dexMap.reserve(indexCount);
-        for (int i = 0; i < indexCount; i++) {
-            DLOGI("dexCodeIndex[%d] = %d", i, *(dexCodeIndex + i));
-            uint32_t dexCodeOffset = *(dexCodeIndex + i);
-            uint16_t methodCount = dexCode->readUInt16(dexCodeOffset);
+    int indexCount = 0;
+    uint32_t *dexCodeIndex = dexCode->readDexCodeIndex(&indexCount);
+    if (dexCodeIndex == nullptr || indexCount <= 0 || indexCount > 256) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return;
+    }
 
-            DLOGD("dexCodeOffset[%d] = %d, methodCount[%d] = %d", i, dexCodeOffset, i,
-                  methodCount);
-            auto codeItemVec = new std::vector<data::CodeItem *>(65536);
-            uint32_t codeItemIndex = dexCodeOffset + 2;
-            for (int k = 0; k < methodCount; k++) {
-                data::CodeItem *codeItem = dexCode->nextCodeItem(&codeItemIndex);
-                uint32_t methodIdx = codeItem->getMethodIdx();
-                codeItemVec->at(methodIdx) = codeItem;
+    dexMap.reserve(static_cast<size_t>(indexCount));
+    for (int i = 0; i < indexCount; i++) {
+        const uint32_t dexCodeOffset = *(dexCodeIndex + i);
+        const uint16_t methodCount = dexCode->readUInt16(dexCodeOffset);
+        auto codeItemVec = std::make_unique<std::vector<data::CodeItem *>>(65536, nullptr);
+        uint32_t codeItemIndex = dexCodeOffset + 2;
+
+        for (int k = 0; k < methodCount; k++) {
+            data::CodeItem *codeItem = dexCode->nextCodeItem(&codeItemIndex);
+            if (codeItem == nullptr
+                    || codeItem->getInsnsSize() == 0
+                    || codeItem->getMethodIdx() >= codeItemVec->size()
+                    || codeItemVec->at(codeItem->getMethodIdx()) != nullptr) {
+                delete codeItem;
+                reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+                return;
             }
-            dexMap.emplace(i, codeItemVec);
-
+            codeItemVec->at(codeItem->getMethodIdx()) = codeItem;
         }
-        DLOGD("map size = %lu", (unsigned long)dexMap.size());
+
+        auto inserted = dexMap.emplace(i, codeItemVec.get());
+        if (!inserted.second) {
+            reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+            return;
+        }
+        (void) codeItemVec.release();
     }
 }
 
