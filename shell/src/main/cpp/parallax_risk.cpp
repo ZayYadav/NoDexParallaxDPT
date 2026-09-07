@@ -16,7 +16,6 @@
 #include "parallax_crypto.h"
 
 extern ShellConfig g_shell_config;
-extern uint8_t PARALLAX_UNKNOWN_DATA[];
 
 namespace {
 constexpr jint SECURITY_ROOT = 1;
@@ -365,7 +364,7 @@ static bool verifyProtectedDexPayload(JNIEnv *env) {
 
         const char *authLabel = AY_OBFUSCATE("Parallax/dex/authentication/v1");
         auto authenticationKey = hmac_sha256(
-                PARALLAX_UNKNOWN_DATA,
+                g_parallax_crypto_meta.master_key,
                 16,
                 reinterpret_cast<const uint8_t *>(authLabel),
                 strlen(authLabel));
