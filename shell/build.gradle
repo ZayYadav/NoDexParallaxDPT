@@ -28,7 +28,7 @@ android {
             cmake {
                 cppFlags "-std=c++20"
                 abiFilters "armeabi-v7a","arm64-v8a"
-                arguments("-DSO_NAME=${soName}", "-DPARALLAX_BUILD_KEY=${parallaxBuildKey}")
+                arguments("-DSO_NAME=${soName}")
             }
         }
 
@@ -127,8 +127,7 @@ def afterAssembleCopy(Project project, Map archMap, boolean debug) {
         }
     }
 
-    // The CLI already carries the matching build key in its manifest. Do not duplicate
-    // the key as a plaintext sidecar in shell-files or uploaded build artifacts.
+    // Remove stale key sidecars created by older builds.
     def staleBuildKey = new File(targetDir, "build-key")
     if (staleBuildKey.exists()) {
         staleBuildKey.delete()
