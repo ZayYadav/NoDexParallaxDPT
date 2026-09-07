@@ -114,7 +114,9 @@ public final class ParallaxKiSettingKarwaDo extends Application
         String[] required = new String[] {
                 "AndroidManifest.xml",
                 "classes.dex",
-                "assets/ItsParallaxBaby"
+                "assets/ItsParallaxBaby",
+                "assets/Parallax.love",
+                "assets/" + ZIP_LIB_DIR + "/" + abiDirName() + "/" + SHELL_SO_NAME
         };
         String expectedDigest = null;
         try (JarFile jar = new JarFile(sourceDir, true)) {
@@ -179,11 +181,6 @@ public final class ParallaxKiSettingKarwaDo extends Application
         } catch (Exception e) {
             return null;
         }
-    }
-
-    private static boolean verifySourceArchiveSigner(String sourceDir) {
-        String digest = sourceArchiveSignerSha256(sourceDir);
-        return digest != null && vsd(digest);
     }
 
     private static File extractShellLibrary(String sourceDir, String dataDir) {
@@ -270,8 +267,13 @@ public final class ParallaxKiSettingKarwaDo extends Application
             if (classLoaderReady) return true;
 
             applicationPackageName = info.packageName;
+            String sourceSigner = sourceArchiveSignerSha256(info.sourceDir);
+            if (sourceSigner == null) {
+                securityReason |= SECURITY_PAYLOAD_TAMPER;
+                return false;
+            }
             loadShellLibrary(info.sourceDir, info.dataDir);
-            if (!verifySourceArchiveSigner(info.sourceDir)) {
+            if (!vsd(sourceSigner)) {
                 securityReason |= SECURITY_PAYLOAD_TAMPER;
                 return false;
             }
@@ -313,8 +315,14 @@ public final class ParallaxKiSettingKarwaDo extends Application
                 case 0x22:
                     info = base.getApplicationInfo();
                     if (info == null) throw new IllegalStateException("application info is null");
+                    String sourceSigner = sourceArchiveSignerSha256(info.sourceDir);
+                    if (sourceSigner == null) {
+                        securityReason |= SECURITY_PAYLOAD_TAMPER;
+                        state = nextState(0x66, 0x76);
+                        break;
+                    }
                     loadShellLibrary(info.sourceDir, info.dataDir);
-                    if (!verifySourceArchiveSigner(info.sourceDir)) {
+                    if (!vsd(sourceSigner)) {
                         securityReason |= SECURITY_PAYLOAD_TAMPER;
                         state = nextState(0x66, 0x76);
                         break;
