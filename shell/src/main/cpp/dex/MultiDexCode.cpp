@@ -222,16 +222,14 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
     }
 
     const bool compressedV3 = isCompressedSealedCodeItem(buffer, size);
-    const char *buildKey = AY_OBFUSCATE(PARALLAX_BUILD_KEY);
-    const char *keyPrefix = compressedV3
-            ? AY_OBFUSCATE("Parallax/codeitem/encryption/v3/")
-            : AY_OBFUSCATE("Parallax/codeitem/encryption/v2/");
-    std::string keyMaterial = std::string(keyPrefix) + buildKey;
+    const char *keyMaterial = compressedV3
+            ? AY_OBFUSCATE("Parallax/codeitem/encryption/v3")
+            : AY_OBFUSCATE("Parallax/codeitem/encryption/v2");
     auto payloadKey = hmac_sha256(
             g_parallax_crypto_meta.master_key,
             16,
-            reinterpret_cast<const uint8_t *>(keyMaterial.data()),
-            keyMaterial.size());
+            reinterpret_cast<const uint8_t *>(keyMaterial),
+            strlen(keyMaterial));
     if (payloadKey.size() != 32) {
         if (!payloadKey.empty()) {
             secure_zero(payloadKey.data(), payloadKey.size());
