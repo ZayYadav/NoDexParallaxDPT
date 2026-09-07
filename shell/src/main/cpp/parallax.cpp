@@ -591,10 +591,8 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
 
             std::string packageName(packageNameChs);
             env->ReleaseStringUTFChars(packageNameJstr, packageNameChs);
-            const char *buildKey = AY_OBFUSCATE(PARALLAX_BUILD_KEY);
-            const char *keySep = AY_OBFUSCATE("_");
-            std::string key_material = packageName + keySep + buildKey;
-            DLOGD("key material for config key: %s", key_material.c_str());
+            const char *keyPrefix = AY_OBFUSCATE("Parallax/config/master/v2/");
+            std::string key_material = std::string(keyPrefix) + packageName;
 
             auto aes_key = hmac_sha256(g_parallax_crypto_meta.master_key,
                                        16,
