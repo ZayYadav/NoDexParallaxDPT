@@ -91,7 +91,11 @@ else()
     message("release hardening: hidden visibility, stack protector, FORTIFY, RELRO/NOW, NX stack, section GC")
 endif()
 
-message("so name: ${SO_NAME}")
+if(NOT DEFINED SO_NAME OR SO_NAME STREQUAL "")
+    message(FATAL_ERROR "SO_NAME is required")
+endif()
+message("so name configured")
+add_compile_definitions(SO_NAME="${SO_NAME}")
 
 
 include_directories(./ )
