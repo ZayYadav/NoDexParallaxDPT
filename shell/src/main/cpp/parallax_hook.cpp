@@ -11,6 +11,7 @@
 #include "common/parallax_string.h"
 #include "parallax_hook.h"
 #include "parallax_risk.h"
+#include "parallax_crypto.h"
 #include "parallax_util.h"
 #include "bytehook.h"
 
