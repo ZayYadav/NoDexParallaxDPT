@@ -12,6 +12,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -161,46 +162,51 @@ public class Aab extends AndroidPackage {
         File aabFile = new File(aab.getFilePath());
         byte[] encKey = KeyUtils.generateKey();
         String aabMainProcessPath = aab.getWorkspaceDir().getAbsolutePath();
-        LogUtils.info("Workspace path: " + aabMainProcessPath);
-        ZipUtils.unZip(aab.getFilePath(), aabMainProcessPath);
-        String manifestFilePath = aab.getManifestFilePath(aabMainProcessPath);
-        String manifestFileDir = aab.getManifestFileDir(aabMainProcessPath);
 
-        String packageName = AabManifestEditor.getPackageName(manifestFilePath);
-        aab.setPackageName(packageName);
-        aab.resolveDefaultShellPackageName();
+        try {
+            LogUtils.info("Workspace path: " + aabMainProcessPath);
+            ZipUtils.unZip(aab.getFilePath(), aabMainProcessPath);
+            String manifestFilePath = aab.getManifestFilePath(aabMainProcessPath);
+            String manifestFileDir = aab.getManifestFileDir(aabMainProcessPath);
 
-        aab.saveApplicationName(aabMainProcessPath);
-        aab.writeProxyAppName(manifestFileDir);
-        if (aab.isAppComponentFactory()) {
-            aab.saveAppComponentFactory(aabMainProcessPath);
-            aab.writeProxyComponentFactoryName(manifestFileDir);
+            String packageName = AabManifestEditor.getPackageName(manifestFilePath);
+            if (packageName == null || packageName.isEmpty()) {
+                throw new IllegalStateException("AAB package name is missing");
+            }
+            aab.setPackageName(packageName);
+            aab.resolveDefaultShellPackageName();
+
+            aab.saveApplicationName(aabMainProcessPath);
+            aab.writeProxyAppName(manifestFileDir);
+            if (aab.isAppComponentFactory()) {
+                aab.saveAppComponentFactory(aabMainProcessPath);
+                aab.writeProxyComponentFactoryName(manifestFileDir);
+            }
+            aab.setExtractNativeLibs(manifestFileDir);
+
+            String assetsPath = aab.getOutAssetsDir(aabMainProcessPath).getAbsolutePath();
+            aab.extractDexCode(aabMainProcessPath, assetsPath);
+            aab.addJunkCodeDex(aabMainProcessPath);
+            aab.compressDexFiles(aabMainProcessPath);
+            aab.deleteAllDexFiles(aabMainProcessPath);
+            aab.combineDexZipWithShellDex(aabMainProcessPath);
+            aab.addKeepDexes(aabMainProcessPath);
+            FileUtils.deleteRecurse(aab.getKeepDexTempDir(aabMainProcessPath));
+
+            aab.copyNativeLibs(aabMainProcessPath);
+            aab.encryptSoFiles(aabMainProcessPath, encKey);
+            aab.writeConfig(aabMainProcessPath, encKey);
+            aab.buildPackage(aabFile.getAbsolutePath(), aabMainProcessPath, FileUtils.getUserDir());
+            LogUtils.info("All done.");
+        } catch (Exception e) {
+            throw new IllegalStateException("AAB protection failed closed", e);
+        } finally {
+            Arrays.fill(encKey, (byte) 0);
+            File workspace = new File(aabMainProcessPath);
+            if (workspace.exists()) {
+                FileUtils.deleteRecurse(workspace);
+            }
         }
-        if (aab.isDebuggable()) {
-            LogUtils.info("Make aab debuggable.");
-            aab.setDebuggable(manifestFileDir, true);
-        }
-        aab.setExtractNativeLibs(manifestFileDir);
-
-        String assetsPath = aab.getOutAssetsDir(aabMainProcessPath).getAbsolutePath();
-        aab.extractDexCode(aabMainProcessPath, assetsPath);
-        aab.addJunkCodeDex(aabMainProcessPath);
-        aab.compressDexFiles(aabMainProcessPath);
-        aab.deleteAllDexFiles(aabMainProcessPath);
-        aab.combineDexZipWithShellDex(aabMainProcessPath);
-        aab.addKeepDexes(aabMainProcessPath);
-        FileUtils.deleteRecurse(aab.getKeepDexTempDir(aabMainProcessPath));
-
-        aab.copyNativeLibs(aabMainProcessPath);
-        aab.encryptSoFiles(aabMainProcessPath, encKey);
-        aab.writeConfig(aabMainProcessPath, encKey);
-        aab.buildPackage(aabFile.getAbsolutePath(), aabMainProcessPath, FileUtils.getUserDir());
-
-        File aabMainProcessFile = new File(aabMainProcessPath);
-        if (aabMainProcessFile.exists()) {
-            FileUtils.deleteRecurse(aabMainProcessFile);
-        }
-        LogUtils.info("All done.");
     }
 
     @Override
