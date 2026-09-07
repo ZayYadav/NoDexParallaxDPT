@@ -393,19 +393,6 @@ public class DexUtils {
             return null;
         }
         int insnsCapacity = code.getInstructions().length;
-        //The insns capacity is not enough to store the return statement, skip it
-        byte[] returnByteCodes = getReturnByteCodes(returnTypeName);
-        if(insnsCapacity * 2 < returnByteCodes.length){
-            LogUtils.noisy("The capacity of insns is not enough to store the return statement. %s.%s() ClassIndex = %d -> %s insnsCapacity = %d byte(s) but returnByteCodes = %d byte(s)",
-                    TypeUtils.getHumanizeTypeName(className),
-                    methodName,
-                    classDef.getTypeIndex(),
-                    TypeUtils.getHumanizeTypeName(returnTypeName),
-                    insnsCapacity * 2,
-                    returnByteCodes.length);
-
-            return null;
-        }
         //Here, MethodIndex corresponds to the index of the method_ids area
         instruction.setMethodIndex(method.getMethodIndex());
         //Note: Here is the size of the array
