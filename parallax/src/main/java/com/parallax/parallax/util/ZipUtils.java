@@ -323,15 +323,23 @@ public class ZipUtils {
      * Unzip a file
      */
     public static void extractFile(String zipFilePath, String fileName, String destDir) {
-        ZipFile zipFile = null;
-        try {
-            zipFile = new ZipFile(zipFilePath);
-            FileHeader fileHeader = zipFile.getFileHeader(fileName);
-            zipFile.extractFile(fileHeader, destDir);
-        } catch (ZipException e) {
+        File root = new File(destDir);
+        if (!root.exists() && !root.mkdirs() && !root.isDirectory()) {
+            throw new IllegalStateException("cannot create single-entry extraction directory");
+        }
+        try (java.util.zip.ZipFile zipFile = new java.util.zip.ZipFile(zipFilePath)) {
+            ZipEntry entry = zipFile.getEntry(fileName);
+            if (entry == null || entry.isDirectory()) {
+                throw new IOException("requested archive entry is missing or not a file");
+            }
+            ensureEntryLimits(entry, 1);
+            File target = resolveArchiveEntry(root, entry.getName());
+            long[] totalBytes = {0L};
+            try (InputStream input = zipFile.getInputStream(entry)) {
+                copyEntryBounded(input, target, totalBytes);
+            }
+        } catch (Exception e) {
             throw new IllegalStateException("single-entry extraction failed closed", e);
-        } finally {
-            IoUtils.close(zipFile);
         }
     }
 
@@ -418,9 +426,13 @@ public class ZipUtils {
                     String rename;
                     do {
                         rename = count + fileName;
-                        file = resolveArchiveEntry(dir,
-                                dir.toPath().relativize(file.getParentFile().toPath()).toString()
-                                        + File.separator + rename);
+                        Path rootPath = dir.getCanonicalFile().toPath();
+                        Path parentPath = file.getParentFile().getCanonicalFile().toPath();
+                        String parentRelative = rootPath.relativize(parentPath).toString();
+                        String candidate = parentRelative.isEmpty()
+                                ? rename
+                                : parentRelative + File.separator + rename;
+                        file = resolveArchiveEntry(dir, candidate);
                         count++;
                     } while (file.exists());
                     resConflictFiles.put(rename, fileName);
