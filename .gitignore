@@ -17,3 +17,13 @@ local.properties
 /shell-files
 /executable
 /.idea
+
+# Never commit signing identities or local protection secrets.
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+protect-config*.json
+parallax-build-ids.properties
