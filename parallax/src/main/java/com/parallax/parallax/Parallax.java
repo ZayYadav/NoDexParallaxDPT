@@ -31,8 +31,8 @@ public class Parallax {
                 return;
             }
             androidPackage.protect();
-        } catch (Exception e){
-            e.printStackTrace();
+        } catch (Exception e) {
+            throw new IllegalStateException("Parallax protection failed closed", e);
         }
     }
 
@@ -114,7 +114,8 @@ public class Parallax {
             String filePath = commandLine.getOptionValue(Const.OPTION_INPUT_FILE);
             HighValueVmCoordinator.setRulesPath(commandLine.getOptionValue(OPTION_HIGH_VALUE_METHODS));
 
-            if (filePath.endsWith(".apk")) {
+            boolean packageFile = filePath.endsWith(".apk") || filePath.endsWith(".aab");
+            if (packageFile) {
                 boolean unsafeApkMode = commandLine.hasOption(Const.OPTION_NO_SIGN_PACKAGE)
                         || commandLine.hasOption(Const.OPTION_DEBUGGABLE_LONG)
                         || commandLine.hasOption(Const.OPTION_DISABLE_APP_COMPONENT_FACTORY_LONG)
@@ -127,7 +128,7 @@ public class Parallax {
                         || commandLine.hasOption(Const.OPTION_DO_NOT_PROTECT_CLASSES_RULES);
                 if (unsafeApkMode) {
                     usage(options,
-                            "Ultra APK mode is fail-closed: debug/no-sign/security-disable/dump/"
+                            "Ultra package mode is fail-closed: debug/no-sign/security-disable/dump/"
                                     + "keep-classes/smaller/exclusion options are not permitted.");
                     return null;
                 }
@@ -178,7 +179,7 @@ public class Parallax {
                         .keepClasses(commandLine.hasOption(Const.OPTION_KEEP_CLASSES))
                         .smaller(commandLine.hasOption(Const.OPTION_SMALLER))
                         .protectConfigFile(commandLine.getOptionValue(Const.OPTION_PROTECT_CONFIG))
-                        .verifySign(commandLine.hasOption(Const.OPTION_VERIFY_SIGN))
+                        .verifySign(true)
                         .riskCheckFlags(riskCheckFlags)
                         .build();
             }
