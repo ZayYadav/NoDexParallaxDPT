@@ -1,6 +1,5 @@
 package com.parallax.parallax.dex;
 
-import com.parallax.parallax.Parallax;
 import com.parallax.parallax.util.CryptoUtils;
 import com.parallax.parallax.util.LogUtils;
 
@@ -32,7 +31,7 @@ import java.util.Set;
 final class HighValueVmFourLayerCodec {
     private static final byte[] ENVELOPE_MAGIC = {'P', 'V', 'M', '4'};
     private static final byte[] RAW_MAGIC = {'P', 'V', 'R', '4'};
-    private static final String KEY_LABEL = "Parallax/highvalue/vm/encryption/v4/";
+    private static final String KEY_LABEL = "Parallax/highvalue/vm/encryption/v4";
     private static final String AAD_PREFIX = "Parallax/highvalue/vm/payload/v4/";
     private static final int NONCE_SIZE = 12;
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -51,7 +50,7 @@ final class HighValueVmFourLayerCodec {
         }
 
         byte[] raw = serialize(programs);
-        byte[] payloadKey = CryptoUtils.hmacSha256(encKey, KEY_LABEL + buildKey);
+        byte[] payloadKey = CryptoUtils.hmacSha256(encKey, KEY_LABEL);
         byte[] nonce = new byte[NONCE_SIZE];
         RANDOM.nextBytes(nonce);
         byte[] aad = (AAD_PREFIX + raw.length).getBytes(StandardCharsets.US_ASCII);
