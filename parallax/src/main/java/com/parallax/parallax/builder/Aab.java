@@ -49,8 +49,7 @@ public class Aab extends AndroidPackage {
         AabManifestEditor.writeApplicationName(inManifestPath, outManifestPath, getProxyApplicationName());
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
@@ -60,8 +59,7 @@ public class Aab extends AndroidPackage {
         AabManifestEditor.writeAppComponentFactory(inManifestPath, outManifestPath, getProxyComponentFactory());
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
@@ -71,8 +69,7 @@ public class Aab extends AndroidPackage {
         AabManifestEditor.writeApplicationExtractNativeLibs(inManifestPath, outManifestPath, "true");
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
@@ -82,8 +79,7 @@ public class Aab extends AndroidPackage {
         AabManifestEditor.writeDebuggable(inManifestPath, outManifestPath, String.valueOf(debuggable));
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
