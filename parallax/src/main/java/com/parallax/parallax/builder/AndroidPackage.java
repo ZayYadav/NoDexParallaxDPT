@@ -54,6 +54,25 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public abstract class AndroidPackage {
+    private static final File SECURE_TEMP_ROOT = createSecureTempRoot();
+
+    private static File createSecureTempRoot() {
+        try {
+            File root = Files.createTempDirectory("parallax-secure-").toFile();
+            // Best-effort owner-only permissions on POSIX and compatible filesystems.
+            root.setReadable(false, false);
+            root.setWritable(false, false);
+            root.setExecutable(false, false);
+            root.setReadable(true, true);
+            root.setWritable(true, true);
+            root.setExecutable(true, true);
+            root.deleteOnExit();
+            return root;
+        } catch (IOException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
 
     public static abstract class Builder {
         public String filePath = null;
@@ -392,14 +411,16 @@ public abstract class AndroidPackage {
     public abstract void setDebuggable(String manifestDir,boolean debuggable);
 
     public File getWorkspaceDir() {
-        return FileUtils.getDir(Const.ROOT_OF_OUT_DIR, "parallaxOut-" + Const.RANDOM_DIR_NAME);
+        return FileUtils.getDir(SECURE_TEMP_ROOT.getAbsolutePath(),
+                "parallaxOut-" + Const.RANDOM_DIR_NAME);
     }
 
     /**
      * Get last process（zipalign，sign）dir
      */
     public File getLastProcessDir() {
-        return FileUtils.getDir(Const.ROOT_OF_OUT_DIR, "parallaxLastProcess-" + Const.RANDOM_DIR_NAME);
+        return FileUtils.getDir(SECURE_TEMP_ROOT.getAbsolutePath(),
+                "parallaxLastProcess-" + Const.RANDOM_DIR_NAME);
     }
 
     protected abstract File getOutAssetsDir(String packageDir);
