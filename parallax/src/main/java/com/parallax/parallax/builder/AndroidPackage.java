@@ -495,43 +495,39 @@ public abstract class AndroidPackage {
     }
 
     public void compressDexFiles(String packageDir) {
-        Map<String, CompressionMethod> rulesMap = new HashMap<>();
-        rulesMap.put("classes\\d*.dex", CompressionMethod.STORE);
-        String unalignedFilePath = getOutAssetsDir(packageDir).getAbsolutePath() + File.separator + Const.KEY_DEXES_STORE_UNALIGNED_NAME;
-        String alignedFilePath = getOutAssetsDir(packageDir).getAbsolutePath() + File.separator + Const.KEY_DEXES_STORE_NAME;
-        ZipUtils.compress(getDexFiles(getDexDir(packageDir))
-                , unalignedFilePath
-                , rulesMap
-        );
-        RandomAccessFile randomAccessFile = null;
-        FileOutputStream out = null;
-        boolean isAligned = false;
-        try {
-            randomAccessFile = new RandomAccessFile(unalignedFilePath, "r");
-            out = new FileOutputStream(alignedFilePath);
-            ZipAlign.alignZip(randomAccessFile, out);
-            IoUtils.close(randomAccessFile);
-            IoUtils.close(out);
-            org.apache.commons.io.FileUtils.forceDelete(new File(unalignedFilePath));
-            LogUtils.info("zip aligned: " + alignedFilePath);
-            isAligned = true;
-        }
-        catch (Exception e) {
-            LogUtils.warn("WARNING: ZipAlign failed: %s", unalignedFilePath);
-        }
-        finally {
-            IoUtils.close(randomAccessFile);
-            IoUtils.close(out);
+        List<File> dexFiles = getDexFiles(getDexDir(packageDir));
+        if (dexFiles.isEmpty()) {
+            throw new IllegalStateException("no hollowed DEX files available for archive");
         }
 
-        if(!isAligned) {
-            try {
-                Files.move(Paths.get(unalignedFilePath), Paths.get(alignedFilePath), StandardCopyOption.REPLACE_EXISTING);
-            }
-            catch (Exception e1) {
-                e1.printStackTrace();
-            }
+        Map<String, CompressionMethod> rulesMap = new HashMap<>();
+        rulesMap.put("classes\\d*.dex", CompressionMethod.STORE);
+        String unalignedFilePath = getOutAssetsDir(packageDir).getAbsolutePath()
+                + File.separator + Const.KEY_DEXES_STORE_UNALIGNED_NAME;
+        String alignedFilePath = getOutAssetsDir(packageDir).getAbsolutePath()
+                + File.separator + Const.KEY_DEXES_STORE_NAME;
+
+        ZipUtils.compress(dexFiles, unalignedFilePath, rulesMap);
+        try (RandomAccessFile input = new RandomAccessFile(unalignedFilePath, "r");
+             FileOutputStream output = new FileOutputStream(alignedFilePath)) {
+            ZipAlign.alignZip(input, output);
+            output.flush();
+            output.getFD().sync();
+        } catch (Exception e) {
+            throw new IllegalStateException("protected DEX zipalign failed closed", e);
         }
+
+        try {
+            Files.deleteIfExists(Paths.get(unalignedFilePath));
+        } catch (IOException e) {
+            throw new IllegalStateException("cannot remove unaligned protected DEX archive", e);
+        }
+
+        File aligned = new File(alignedFilePath);
+        if (!aligned.isFile() || aligned.length() == 0) {
+            throw new IllegalStateException("aligned protected DEX archive missing");
+        }
+        LogUtils.info("Protected DEX archive aligned.");
     }
 
     public void copyNativeLibs(String packageDir) {
@@ -930,8 +926,11 @@ public abstract class AndroidPackage {
         }
 
         File outputDirFile = new File(outputDir);
-        if (!outputDirFile.exists()) {
-            outputDirFile.mkdirs();
+        if (!outputDirFile.exists() && !outputDirFile.mkdirs() && !outputDirFile.isDirectory()) {
+            throw new IllegalStateException("cannot create protected package output directory");
+        }
+        if (!outputDirFile.isDirectory()) {
+            throw new IllegalStateException("protected package output path is not a directory");
         }
 
         String originPackageName = new File(originPackagePath).getName();
@@ -950,17 +949,18 @@ public abstract class AndroidPackage {
                 + File.separator
                 + (resultFileName != null ? "unsigned_" + resultFileName : getUnsignPackageName(originPackageName));
 
-        boolean zipalignSuccess = false;
-
         try {
             zipalign(unzipalignPackagePath, unsignedPackagePath);
-            zipalignSuccess = true;
-            LogUtils.info("zipalign success.");
         } catch (Exception e) {
-            LogUtils.error("zipalign failed!");
+            throw new IllegalStateException("final package zipalign failed closed", e);
         }
+        File unsignedPackage = new File(unsignedPackagePath);
+        if (!unsignedPackage.isFile() || unsignedPackage.length() == 0) {
+            throw new IllegalStateException("zipaligned package output is missing");
+        }
+        LogUtils.info("Final package zipalign verified.");
 
-        String willSignPackagePath = zipalignSuccess ? unsignedPackagePath : unzipalignPackagePath;
+        String willSignPackagePath = unsignedPackagePath;
 
         boolean signResult = false;
 
@@ -990,7 +990,9 @@ public abstract class AndroidPackage {
                     Files.copy(Paths.get(willSignPackagePath), Paths.get(signedPackagePath),
                             StandardCopyOption.REPLACE_EXISTING);
                 }
-            } catch (IOException ignored) {}
+            } catch (IOException e) {
+                throw new IllegalStateException("unsigned output copy failed closed", e);
+            }
         }
 
         File willSignPackageFile = new File(willSignPackagePath);
@@ -1009,12 +1011,10 @@ public abstract class AndroidPackage {
             LogUtils.info("signed package file: " + signedPackageFile.getAbsolutePath());
         }
 
-        if(zipalignSuccess) {
-            try {
-                Files.deleteIfExists(Paths.get(unzipalignPackagePath));
-            }catch (Exception e){
-                LogUtils.debug("unzipalign package path err = %s", e);
-            }
+        try {
+            Files.deleteIfExists(Paths.get(unzipalignPackagePath));
+        } catch (IOException e) {
+            throw new IllegalStateException("temporary package cleanup failed", e);
         }
 
         if (idsigFile.exists()) {
