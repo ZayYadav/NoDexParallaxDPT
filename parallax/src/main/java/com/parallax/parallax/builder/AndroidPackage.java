@@ -392,7 +392,6 @@ public abstract class AndroidPackage {
         ShellConfig shellConfig = ShellConfig.getInstance();
         String json = shellConfig.toJson();
         String keyMaterial = packageName + "_" + buildKey;
-        LogUtils.info("Write config: " + json);
         byte[] masterKey = CryptoUtils.hmacSha256(key, keyMaterial);
         byte[] iv = KeyUtils.generateIV(key);
         byte[] secData = CryptoUtils.encryptAuthenticatedConfig(masterKey, iv, json.getBytes(StandardCharsets.UTF_8));
@@ -592,7 +591,7 @@ public abstract class AndroidPackage {
             List<ReadElf.SectionHeader> sectionHeaders = readElf.getSectionHeaders();
             for (ReadElf.SectionHeader sectionHeader : sectionHeaders) {
                 if(".bitcode".equals(sectionHeader.getName())) {
-                    LogUtils.info("start encrypt %s section: %s, offset: %s, size: %s",
+                    LogUtils.noisy("encrypt native section: %s section=%s offset=%s size=%s",
                             soFile.getAbsolutePath(),
                             sectionHeader.getName(),
                             HexUtils.toHexString(sectionHeader.getOffset()),
