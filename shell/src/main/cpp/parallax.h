@@ -70,6 +70,7 @@ void replaceApplicationOnActivityThread(JNIEnv *env,jclass __unused, jobject rea
 jobject replaceApplicationOnLoadedApk(JNIEnv *env, jclass __unused, jstring realApplicationClassName);
 
 void veritySignature(JNIEnv *env);
+jboolean verifySourceSignerDigest(JNIEnv *env, jclass, jstring digest);
 
 void clinit(__unused JNIEnv *env, __unused jclass);
 
