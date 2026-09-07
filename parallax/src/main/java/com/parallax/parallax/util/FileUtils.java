@@ -32,10 +32,16 @@ public class FileUtils {
     /**
      * Get a directory and create it if it doesn't exist
      */
-    public static File getDir(String path, String dirName){
-        File dirFile = new File(path,dirName);
-        if(!dirFile.exists()){
-            dirFile.mkdirs();
+    public static File getDir(String path, String dirName) {
+        if (path == null || dirName == null || dirName.isEmpty()) {
+            throw new IllegalArgumentException("invalid directory path");
+        }
+        File dirFile = new File(path, dirName);
+        if (!dirFile.exists() && !dirFile.mkdirs() && !dirFile.isDirectory()) {
+            throw new IllegalStateException("cannot create directory: " + dirFile.getName());
+        }
+        if (!dirFile.isDirectory()) {
+            throw new IllegalStateException("expected directory: " + dirFile.getName());
         }
         return dirFile;
     }
@@ -44,28 +50,32 @@ public class FileUtils {
      * Recursively delete directories or files
      */
     public static void deleteRecurse(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
         try {
-            if(file.isFile()) {
-                file.delete();
-            }
-            else {
+            if (file.isFile()) {
+                java.nio.file.Files.delete(file.toPath());
+            } else {
                 org.apache.commons.io.FileUtils.deleteDirectory(file);
             }
-        }
-        catch (IOException e) {
-            e.printStackTrace();
+        } catch (IOException e) {
+            throw new IllegalStateException("failed to delete workspace path: " + file.getName(), e);
         }
     }
 
     public static String getExecutablePath() {
         try {
             URL location = Parallax.class.getProtectionDomain().getCodeSource().getLocation();
-            File jarFile = new File(location.toURI());
-            return jarFile.getParent();
+            File jarFile = new File(location.toURI()).getCanonicalFile();
+            File parent = jarFile.getParentFile();
+            if (parent == null || !parent.isDirectory()) {
+                throw new IOException("protector executable directory is unavailable");
+            }
+            return parent.getAbsolutePath();
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new IllegalStateException("cannot resolve protector executable path", e);
         }
-        return "";
     }
 
 
