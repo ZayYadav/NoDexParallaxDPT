@@ -387,14 +387,11 @@ public abstract class AndroidPackage {
         if (packageName == null || packageName.isEmpty()) {
             throw new IllegalStateException("package name is empty, cannot derive config aes key");
         }
-        String buildKey = Parallax.getBuildKey();
-        if (buildKey == null || buildKey.isEmpty()) {
-            throw new IllegalStateException("parallax build key is missing, cannot derive config aes key");
-        }
-        File configFile = new File(getOutAssetsDir(packageDir).getAbsolutePath() + File.separator + Const.KEY_SHELL_CONFIG_STORE_NAME);
+        File configFile = new File(getOutAssetsDir(packageDir).getAbsolutePath()
+                + File.separator + Const.KEY_SHELL_CONFIG_STORE_NAME);
         ShellConfig shellConfig = ShellConfig.getInstance();
         String json = shellConfig.toJson();
-        String keyMaterial = packageName + "_" + buildKey;
+        String keyMaterial = "Parallax/config/master/v2/" + packageName;
         byte[] masterKey = CryptoUtils.hmacSha256(key, keyMaterial);
         byte[] iv = KeyUtils.generateIV(key);
         byte[] secData = CryptoUtils.encryptAuthenticatedConfig(masterKey, iv, json.getBytes(StandardCharsets.UTF_8));
