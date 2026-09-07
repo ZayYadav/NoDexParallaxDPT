@@ -142,6 +142,10 @@ jobs:
               echo "Encrypted runtime section is missing from $SO" >&2
               exit 1
             }
+            "$READELF" -S "$SO" | grep -Fq '.psec' || {
+              echo "Hidden native key section is missing from $SO" >&2
+              exit 1
+            }
             "$READELF" -d "$SO" | grep -Fq 'INIT_ARRAY' || {
               echo "Native bootstrap constructor is missing from $SO" >&2
               exit 1
