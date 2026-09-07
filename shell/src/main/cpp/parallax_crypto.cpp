@@ -104,6 +104,47 @@ std::vector<uint8_t> aes_cbc_decrypt(const uint8_t *key,
     return out_vec;
 }
 
+std::vector<uint8_t> aes_ctr_crypt(const uint8_t *key,
+                                  size_t key_bits,
+                                  const uint8_t *nonce_counter,
+                                  const uint8_t *in,
+                                  size_t inlen) {
+    if (key == nullptr || nonce_counter == nullptr || in == nullptr || inlen == 0) {
+        return {};
+    }
+    if (key_bits != 128 && key_bits != 192 && key_bits != 256) {
+        return {};
+    }
+
+    std::vector<uint8_t> out(inlen);
+    mbedtls_aes_context ctx;
+    mbedtls_aes_init(&ctx);
+
+    int ret = mbedtls_aes_setkey_enc(&ctx, key, static_cast<unsigned int>(key_bits));
+    if (ret != 0) {
+        mbedtls_aes_free(&ctx);
+        secure_zero(out.data(), out.size());
+        return {};
+    }
+
+    size_t nc_off = 0;
+    uint8_t counter[16] = {0};
+    uint8_t stream_block[16] = {0};
+    memcpy(counter, nonce_counter, sizeof(counter));
+
+    ret = mbedtls_aes_crypt_ctr(&ctx, inlen, &nc_off, counter, stream_block,
+                                in, out.data());
+    secure_zero(counter, sizeof(counter));
+    secure_zero(stream_block, sizeof(stream_block));
+    mbedtls_aes_free(&ctx);
+
+    if (ret != 0) {
+        secure_zero(out.data(), out.size());
+        return {};
+    }
+    return out;
+}
+
 std::vector<uint8_t> aes_gcm_decrypt(const uint8_t *key,
                                      size_t key_bits,
                                      const uint8_t *nonce,
