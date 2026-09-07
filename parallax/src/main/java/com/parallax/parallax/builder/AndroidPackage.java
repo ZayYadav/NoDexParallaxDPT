@@ -409,6 +409,27 @@ public abstract class AndroidPackage {
 
     public abstract void setDebuggable(String manifestDir,boolean debuggable);
 
+    protected static void replaceGeneratedFile(File generated, File target, String label) {
+        if (generated == null || target == null || !generated.isFile() || generated.length() == 0) {
+            throw new IllegalStateException(label + " transform produced no output");
+        }
+        try {
+            try {
+                Files.move(generated.toPath(), target.toPath(),
+                        StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException ignored) {
+                Files.move(generated.toPath(), target.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING);
+            }
+            if (!target.isFile() || target.length() == 0) {
+                throw new IOException(label + " replacement verification failed");
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException(label + " replacement failed closed", e);
+        }
+    }
+
     public File getWorkspaceDir() {
         return FileUtils.getDir(SECURE_TEMP_ROOT.getAbsolutePath(),
                 "parallaxOut-" + Const.RANDOM_DIR_NAME);
