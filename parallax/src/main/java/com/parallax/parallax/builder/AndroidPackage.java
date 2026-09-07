@@ -1199,6 +1199,25 @@ public abstract class AndroidPackage {
         processProtectConfigFile();
 
         ShellConfig shellConfig = ShellConfig.getInstance();
+
+        // Enforce the ultra profile here as well as in the CLI. This closes alternate
+        // Builder/config-file entry points that could otherwise create a deliberately
+        // weakened or non-runnable protected package.
+        if (isDebuggable()
+                || !isSign()
+                || !isVerifySign()
+                || !isAppComponentFactory()
+                || isDumpCode()
+                || isKeepClasses()
+                || isSmaller()
+                || !org.apache.commons.lang3.StringUtils.isBlank(getRulesFilePath())
+                || getRiskCheckFlags() != 0
+                || shellConfig.getRiskCheckFlags() != 0) {
+            throw new IllegalStateException(
+                    "ultra protection policy rejects debug/no-sign/disabled-check/"
+                            + "dump/keep/smaller/exclusion modes");
+        }
+        shellConfig.setRiskCheckFlags(0);
         if (isSign()) {
             ShellConfig.SignatureConfig sig = shellConfig.getSignatureConfig();
             if (sig == null
