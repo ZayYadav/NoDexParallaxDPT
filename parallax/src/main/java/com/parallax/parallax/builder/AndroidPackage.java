@@ -310,64 +310,88 @@ public abstract class AndroidPackage {
      * Combine the compressed dex file with the shell dex to create a new dex file.
      */
     protected void combineDexZipWithShellDex(String packageMainProcessPath) {
+        File renameDexFile = new File(getRenameDexPath());
+        byte[] zipData = null;
+        byte[] shellDex = null;
+        byte[] combined = null;
         try {
             File shellDexFile = new File(getProxyDexPath());
-            File renameDexFile = new File(getRenameDexPath());
-
             ShellConfig shellConfig = ShellConfig.getInstance();
-
-            boolean needRename = !org.apache.commons.lang3.StringUtils.isBlank(shellConfig.getShellPackageName())
+            boolean needRename = !org.apache.commons.lang3.StringUtils.isBlank(
+                    shellConfig.getShellPackageName())
                     && !Const.DEFAULT_SHELL_PACKAGE_NAME.equals(shellConfig.getShellPackageName());
 
-            if(needRename) {
-                DexUtils.renamePackageName(shellDexFile, renameDexFile, shellConfig.getSlashShellPackageName());
+            if (needRename) {
+                DexUtils.renamePackageName(
+                        shellDexFile, renameDexFile, shellConfig.getSlashShellPackageName());
             }
 
-            File originalDexZipFile = new File(getOutAssetsDir(packageMainProcessPath).getAbsolutePath() + File.separator + Const.KEY_DEXES_STORE_NAME);
-            byte[] zipData = com.android.dex.util.FileUtils.readFile(originalDexZipFile);// Read the zip file as binary data
-            byte[] unShellDexArray =  com.android.dex.util.FileUtils.readFile(!needRename ? shellDexFile : renameDexFile); // Read the dex file as binary data
-            int zipDataLen = zipData.length;
-            int unShellDexLen = unShellDexArray.length;
-            LogUtils.info("Dexes zip file size: %s", zipDataLen);
-            LogUtils.info("Proxy dex file size: %s", unShellDexLen);
-            int totalLen = zipDataLen + unShellDexLen + 4;// An additional 4 bytes are added to store the length
-            byte[] newDexBytes = new byte[totalLen]; // Allocate the new length
-
-            // Add the shell code
-            System.arraycopy(unShellDexArray, 0, newDexBytes, 0, unShellDexLen);// First, copy the dex content
-            // Add the unencrypted zip data
-            System.arraycopy(zipData, 0, newDexBytes, unShellDexLen, zipDataLen); // Then copy the APK content after the dex content
-            // Add the length of the shell data
-            System.arraycopy(FileUtils.intToByte(zipDataLen), 0, newDexBytes, totalLen - 4, 4);// The last 4 bytes are for the length
-
-            // Modify the DEX file size header
-            FileUtils.fixFileSizeHeader(newDexBytes);
-            // Modify the DEX SHA1 header
-            FileUtils.fixSHA1Header(newDexBytes);
-            // Modify the DEX CheckSum header
-            FileUtils.fixCheckSumHeader(newDexBytes);
-
-            String targetDexFile = getDexDir(packageMainProcessPath) + File.separator + "classes.dex";
-
-
-            File file = new File(targetDexFile);
-            if (!file.exists()) {
-                file.createNewFile();
+            File actualShellDex = needRename ? renameDexFile : shellDexFile;
+            File dexArchive = new File(
+                    getOutAssetsDir(packageMainProcessPath), Const.KEY_DEXES_STORE_NAME);
+            if (!actualShellDex.isFile() || actualShellDex.length() <= 0
+                    || actualShellDex.length() > 128L * 1024L) {
+                throw new IllegalStateException("bootstrap DEX is missing or outside size policy");
+            }
+            if (!dexArchive.isFile() || dexArchive.length() <= 0
+                    || dexArchive.length() > 768L * 1024L * 1024L) {
+                throw new IllegalStateException("authenticated hollowed DEX archive is missing");
             }
 
-            // Output the new dex file
-            try (FileOutputStream localFileOutputStream = new FileOutputStream(targetDexFile)) {
-                localFileOutputStream.write(newDexBytes);
-                localFileOutputStream.flush();
+            zipData = com.android.dex.util.FileUtils.readFile(dexArchive);
+            shellDex = com.android.dex.util.FileUtils.readFile(actualShellDex);
+            if (zipData.length < 4 || zipData[0] != 0x50 || zipData[1] != 0x4b) {
+                throw new IllegalStateException("hollowed DEX archive is not a ZIP payload");
             }
-            LogUtils.info("New Dex file generated: " + targetDexFile);
-            // Delete the dex zip package
-            FileUtils.deleteRecurse(originalDexZipFile);
-            FileUtils.deleteRecurse(renameDexFile);
-        }catch (Exception e){
-            e.printStackTrace();
+            if (shellDex.length < 112
+                    || shellDex[0] != 'd' || shellDex[1] != 'e'
+                    || shellDex[2] != 'x' || shellDex[3] != '\n') {
+                throw new IllegalStateException("bootstrap DEX header is invalid");
+            }
+
+            long totalLong = (long) shellDex.length + (long) zipData.length + 4L;
+            if (totalLong > Integer.MAX_VALUE) {
+                throw new IllegalStateException("combined protected DEX exceeds format limits");
+            }
+            int totalLen = (int) totalLong;
+            combined = new byte[totalLen];
+            System.arraycopy(shellDex, 0, combined, 0, shellDex.length);
+            System.arraycopy(zipData, 0, combined, shellDex.length, zipData.length);
+            System.arraycopy(FileUtils.intToByte(zipData.length), 0, combined, totalLen - 4, 4);
+
+            FileUtils.fixFileSizeHeader(combined);
+            FileUtils.fixSHA1Header(combined);
+            FileUtils.fixCheckSumHeader(combined);
+
+            File targetDex = new File(getDexDir(packageMainProcessPath), "classes.dex");
+            File tempDex = new File(targetDex.getParentFile(), ".classes.dex.parallax.tmp");
+            try (FileOutputStream output = new FileOutputStream(tempDex, false)) {
+                output.write(combined);
+                output.flush();
+                output.getFD().sync();
+            }
+            replaceGeneratedFile(tempDex, targetDex, "combined protected DEX");
+
+            if (!targetDex.isFile() || targetDex.length() != totalLen) {
+                throw new IllegalStateException("combined protected DEX verification failed");
+            }
+
+            FileUtils.deleteRecurse(dexArchive);
+            if (renameDexFile.exists()) {
+                FileUtils.deleteRecurse(renameDexFile);
+            }
+            LogUtils.info("Combined protected DEX: bootstrap=%d hollowedArchive=%d total=%d",
+                    shellDex.length, zipData.length, totalLen);
+        } catch (Exception e) {
+            throw new IllegalStateException("combined protected DEX creation failed closed", e);
+        } finally {
+            if (zipData != null) Arrays.fill(zipData, (byte) 0);
+            if (shellDex != null) Arrays.fill(shellDex, (byte) 0);
+            if (combined != null) Arrays.fill(combined, (byte) 0);
+            if (renameDexFile.exists()) {
+                FileUtils.deleteRecurse(renameDexFile);
+            }
         }
-
     }
 
     private String getUnsignPackageName(String packageFileName){
