@@ -16,7 +16,6 @@
 #include "parallax_crypto.h"
 #include "parallax_risk.h"
 
-extern uint8_t PARALLAX_UNKNOWN_DATA[];
 
 namespace {
 constexpr uint8_t CODE_ITEM_MAGIC_V2[] = {'P', 'C', 'I', '2'};
@@ -229,7 +228,7 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
             : AY_OBFUSCATE("Parallax/codeitem/encryption/v2/");
     std::string keyMaterial = std::string(keyPrefix) + buildKey;
     auto payloadKey = hmac_sha256(
-            PARALLAX_UNKNOWN_DATA,
+            g_parallax_crypto_meta.master_key,
             16,
             reinterpret_cast<const uint8_t *>(keyMaterial.data()),
             keyMaterial.size());
