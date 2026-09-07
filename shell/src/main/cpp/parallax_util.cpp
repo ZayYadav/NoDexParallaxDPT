@@ -18,6 +18,7 @@
 #include <sys/uio.h>
 
 #include "parallax_util.h"
+#include "parallax_crypto.h"
 #include "common/parallax_log.h"
 
 using namespace parallax;
@@ -544,11 +545,18 @@ unzipDexFilesToMemory(uint8_t *zip_addr, size_t zip_size,
     out_dexes.reserve(entries.size());
     for (auto &e: entries) {
         if (static_cast<int>(out_dexes.size()) != e.index) {
-            for (auto &owned : entries) {
-                delete[] owned.data;
-                owned.data = nullptr;
+            for (auto &loaded : out_dexes) {
+                secure_zero(loaded.first, loaded.second);
+                delete[] loaded.first;
             }
             out_dexes.clear();
+            for (auto &owned : entries) {
+                if (owned.data != nullptr) {
+                    secure_zero(owned.data, owned.size);
+                    delete[] owned.data;
+                    owned.data = nullptr;
+                }
+            }
             return false;
         }
         out_dexes.emplace_back(e.data, e.size);
