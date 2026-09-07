@@ -125,7 +125,7 @@ public class Parallax {
                 + "- arm64     (arm64-v8a)\n"
                 + "- x86\n"
                 + "- x86_64"));
-        options.addOption(new Option(Const.OPTION_VERIFY_SIGN, Const.OPTION_VERIFY_SIGN_LONG, false, "Enable runtime app signature verification. The certificate SHA-256 is computed automatically from the signing keystore.\n"));
+        options.addOption(new Option(Const.OPTION_VERIFY_SIGN, Const.OPTION_VERIFY_SIGN_LONG, false, "Runtime signer verification is mandatory for APK protection; this flag is retained for compatibility.\n"));
         options.addOption(new Option(null, Const.OPTION_DISABLE_FRIDA_DETECT_LONG, false, "Disable runtime Frida detection.\n"));
         options.addOption(new Option(null, Const.OPTION_DISABLE_CRC_DETECT_LONG, false, "Disable runtime libc .text CRC detection.\n"));
         options.addOption(new Option(null, Const.OPTION_DISABLE_ANTI_DEBUG_LONG, false, "Disable runtime anti-debug.\n"));
@@ -184,7 +184,7 @@ public class Parallax {
                         .keepClasses(commandLine.hasOption(Const.OPTION_KEEP_CLASSES))
                         .smaller(commandLine.hasOption(Const.OPTION_SMALLER))
                         .protectConfigFile(commandLine.getOptionValue(Const.OPTION_PROTECT_CONFIG))
-                        .verifySign(commandLine.hasOption(Const.OPTION_VERIFY_SIGN))
+                        .verifySign(true)
                         .riskCheckFlags(riskCheckFlags)
                         .build();
             }
