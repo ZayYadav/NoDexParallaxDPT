@@ -138,8 +138,7 @@ public class Apk extends AndroidPackage {
         ApkManifestEditor.writeApplicationName(inManifestPath, outManifestPath, getProxyApplicationName());
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
@@ -149,8 +148,7 @@ public class Apk extends AndroidPackage {
         ApkManifestEditor.writeAppComponentFactory(inManifestPath, outManifestPath, getProxyComponentFactory());
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
@@ -162,8 +160,7 @@ public class Apk extends AndroidPackage {
         FileProcesser.processManifestFile(inManifestPath, outManifestPath, property);
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
@@ -173,8 +170,7 @@ public class Apk extends AndroidPackage {
         ApkManifestEditor.writeDebuggable(inManifestPath, outManifestPath, debuggable ? "true" : "false");
         File inManifestFile = new File(inManifestPath);
         File outManifestFile = new File(outManifestPath);
-        inManifestFile.delete();
-        outManifestFile.renameTo(inManifestFile);
+        replaceGeneratedFile(outManifestFile, inManifestFile, "manifest");
     }
 
     @Override
