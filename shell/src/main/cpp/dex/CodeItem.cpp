@@ -15,7 +15,6 @@
 #include "parallax_crypto.h"
 #include "parallax_risk.h"
 
-extern uint8_t PARALLAX_UNKNOWN_DATA[];
 
 namespace {
 std::once_flag g_runtime_key_once;
@@ -55,7 +54,7 @@ void initRuntimeKey() {
     memcpy(seed.data() + 40, &addressSalt,
            sizeof(addressSalt) < 8 ? sizeof(addressSalt) : 8);
 
-    auto derived = hmac_sha256(PARALLAX_UNKNOWN_DATA,
+    auto derived = hmac_sha256(g_parallax_crypto_meta.master_key,
                                16,
                                seed.data(),
                                seed.size());
