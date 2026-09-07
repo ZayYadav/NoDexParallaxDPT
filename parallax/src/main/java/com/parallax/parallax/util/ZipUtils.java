@@ -264,7 +264,7 @@ public class ZipUtils {
             }
 
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new IllegalStateException("APK compression failed closed", e);
         } finally {
             IoUtils.close(zipFile);
         }
@@ -329,7 +329,7 @@ public class ZipUtils {
             FileHeader fileHeader = zipFile.getFileHeader(fileName);
             zipFile.extractFile(fileHeader, destDir);
         } catch (ZipException e) {
-            e.printStackTrace();
+            throw new IllegalStateException("single-entry extraction failed closed", e);
         } finally {
             IoUtils.close(zipFile);
         }
@@ -363,7 +363,7 @@ public class ZipUtils {
                 }
             }
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new IllegalStateException("ZIP compression failed closed", e);
         } finally {
             IoUtils.close(zipFile);
         }
