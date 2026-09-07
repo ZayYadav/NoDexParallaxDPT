@@ -186,8 +186,10 @@ public class Aab extends AndroidPackage {
 
             String assetsPath = aab.getOutAssetsDir(aabMainProcessPath).getAbsolutePath();
             aab.extractDexCode(aabMainProcessPath, assetsPath);
+            PayloadSealer.sealCodeItemPayload(aab, aabMainProcessPath, encKey);
             aab.addJunkCodeDex(aabMainProcessPath);
             aab.compressDexFiles(aabMainProcessPath);
+            PayloadSealer.compactAndAuthenticateDexPayload(aab, aabMainProcessPath, encKey);
             aab.deleteAllDexFiles(aabMainProcessPath);
             aab.combineDexZipWithShellDex(aabMainProcessPath);
             aab.addKeepDexes(aabMainProcessPath);
