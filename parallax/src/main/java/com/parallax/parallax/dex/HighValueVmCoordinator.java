@@ -166,7 +166,7 @@ public final class HighValueVmCoordinator {
                 vm4Programs.subList(vm4StartSize, vm4Programs.size()).clear();
                 nextVmId = vmIdBefore;
                 nextVm4Id = vm4IdBefore;
-                LogUtils.info("Automatic VM fallback for %s: %s", dex.getName(),
+                LogUtils.noisy("Automatic VM fallback for %s: %s", dex.getName(),
                         automaticFailure.getMessage());
             } finally {
                 Files.deleteIfExists(original.toPath());
