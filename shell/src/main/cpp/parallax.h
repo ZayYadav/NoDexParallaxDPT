@@ -44,14 +44,6 @@ using namespace parallax;
 #define FLAG_DISABLE_CRC_DETECT   (1u << 1)
 #define FLAG_DISABLE_ANTI_DEBUG   (1u << 2)
 
-struct ParallaxCryptoMetadata {
-    uint8_t master_key[16];
-    uint8_t bitcode_nonce[16];
-    uint8_t bitcode_tag[32];
-};
-
-extern ParallaxCryptoMetadata g_parallax_crypto_meta;
-
 struct ShellConfig {
     std::string application_name;
     std::string application_component_factory;
