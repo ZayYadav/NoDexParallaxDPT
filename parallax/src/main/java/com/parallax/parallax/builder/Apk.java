@@ -449,6 +449,7 @@ public class Apk extends AndroidPackage {
         } catch (Exception e) {
             throw new IllegalStateException("APK protection failed", e);
         } finally {
+            Arrays.fill(encKey, (byte) 0);
             File apkMainProcessFile = new File(apkMainProcessPath);
             if (apkMainProcessFile.exists()) {
                 FileUtils.deleteRecurse(apkMainProcessFile);
