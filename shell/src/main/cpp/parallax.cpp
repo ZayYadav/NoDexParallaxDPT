@@ -545,7 +545,8 @@ PARALLAX_ENCRYPT void readCodeItem(uint8_t *data,size_t data_len) {
     }
 }
 
-PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
+PARALLAX_ENCRYPT bool read_shell_config(JNIEnv *env) {
+    bool loaded = false;
     void *package_addr = nullptr;
     size_t package_size = 0;
     load_package(env, &package_addr, &package_size);
@@ -560,7 +561,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
             if (mBoundApplicationObj == nullptr) {
                 DLOGE("bound application is null");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             reflect::android_app_ActivityThread::AppBindData appBindData(env, mBoundApplicationObj);
@@ -568,7 +569,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
             if (appInfoObj == nullptr) {
                 DLOGE("app info is null");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             reflect::android_content_pm_ApplicationInfo applicationInfo(env, appInfoObj);
@@ -576,7 +577,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
             if (packageNameJstr == nullptr) {
                 DLOGE("package name is null");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             const char *packageNameChs = env->GetStringUTFChars(packageNameJstr, nullptr);
@@ -586,7 +587,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
                     env->ReleaseStringUTFChars(packageNameJstr, packageNameChs);
                 }
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             std::string packageName(packageNameChs);
@@ -601,7 +602,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
             if (aes_key.size() != 32) {
                 DLOGE("derive config aes key failed");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             constexpr size_t CONFIG_HEADER_SIZE = 4;
@@ -611,7 +612,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
                 !constant_time_equal(entry_data, config_magic, CONFIG_HEADER_SIZE)) {
                 DLOGE("invalid Parallax config envelope");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             auto encryption_key = hmac_sha256(aes_key.data(), aes_key.size(),
@@ -625,7 +626,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
                 !constant_time_equal(expected_tag.data(), entry_data + authenticated_size, CONFIG_TAG_SIZE)) {
                 DLOGE("Parallax config checksum verification failed");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             std::vector<uint8_t> indata(entry_data + CONFIG_HEADER_SIZE,
@@ -640,13 +641,11 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
             if (decrypted_data.empty()) {
                 DLOGE("decrypt shell config failed");
                 unload_package(package_addr, package_size);
-                return;
+                return false;
             }
 
             try {
                 std::string jsonStr = std::string(decrypted_data.begin(), decrypted_data.end());
-                DLOGD("raw config: '%s'", jsonStr.c_str());
-
                 nlohmann::json shell_config = nlohmann::json::parse(jsonStr);
                 const char *keyAppName = AY_OBFUSCATE("app_name");
                 const char *keyAcfName = AY_OBFUSCATE("acf_name");
@@ -663,20 +662,32 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
                 g_shell_config.insns_xor_key = shell_config.value(keyInsnsXorKey, 0);
                 g_shell_config.risk_check_flags = shell_config.value(keyRiskCheckFlags, 0);
 
-                DLOGD("application_name = %s", g_shell_config.application_name.c_str());
-                DLOGD("application_component_factory = %s", g_shell_config.application_component_factory.c_str());
-                DLOGD("jni_class_name = %s", g_shell_config.jni_class_name.c_str());
-                DLOGD("app_sign_sha256 = %s", g_shell_config.app_sign_sha256.c_str());
-                DLOGD("dex_sign = %s", g_shell_config.dex_sign.c_str());
-                DLOGD("insns_xor_key = 0x%x", g_shell_config.insns_xor_key);
-                DLOGD("risk_check_flags = 0x%x", g_shell_config.risk_check_flags);
+                if (g_shell_config.jni_class_name.empty()
+                        || g_shell_config.app_sign_sha256.size() != 64
+                        || g_shell_config.dex_sign.empty()
+                        || g_shell_config.insns_xor_key == 0
+                        || g_shell_config.risk_check_flags != 0) {
+                    throw std::runtime_error("mandatory ultra protection config is invalid");
+                }
+                loaded = true;
             } catch (const std::exception &e) {
                 DLOGE("parse shell config failed: %s", e.what());
+                reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+                loaded = false;
             }
+            secure_zero(decrypted_data.data(), decrypted_data.size());
+            secure_zero(aes_key.data(), aes_key.size());
+            secure_zero(encryption_key.data(), encryption_key.size());
+            secure_zero(authentication_key.data(), authentication_key.size());
+            secure_zero(expected_tag.data(), expected_tag.size());
         }
     }
 
     unload_package(package_addr, package_size);
+    if (!loaded) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+    }
+    return loaded;
 }
 
 
@@ -696,7 +707,10 @@ PARALLAX_ENCRYPT JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *) {
         return JNI_ERR;
     }
 
-    read_shell_config(env);
+    if (!read_shell_config(env)) {
+        DLOGF("authenticated protection config load failed");
+        return JNI_ERR;
+    }
 
     antiRisk();
 
