@@ -583,8 +583,12 @@ PARALLAX_ENCRYPT bool read_shell_config(JNIEnv *env) {
     void *package_addr = nullptr;
     size_t package_size = 0;
     load_package(env, &package_addr, &package_size);
+    if (package_addr == nullptr || package_size == 0) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return false;
+    }
 
-    auto entry = read_zip_file_entry(package_addr, package_size , AY_OBFUSCATE(SHELL_CONFIG_IN_ZIP));
+    auto entry = read_zip_file_entry(package_addr, package_size, AY_OBFUSCATE(SHELL_CONFIG_IN_ZIP));
     if(entry.has_value()) {
         auto [entry_data, entry_size] = entry.value();
         std::unique_ptr<uint8_t[]> entry_guard(entry_data);
