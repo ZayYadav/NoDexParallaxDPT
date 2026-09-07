@@ -58,7 +58,7 @@ public class Const {
     public static final String ROOT_OF_OUT_DIR = System.getProperty("java.io.tmpdir");
 
     public static final short MULTI_DEX_CODE_VERSION = 2;
-    public static final String RC4_KEY_SYMBOL = "PARALLAX_UNKNOWN_DATA";
+    public static final String NATIVE_KEY_SECTION = ".psec";
 
     public static final String KEY_SHELL_CONFIG_STORE_NAME = "ItsParallaxBaby";
     public static final String KEY_BUILD_KEY_FILE_NAME = "build-key";
