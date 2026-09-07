@@ -66,6 +66,27 @@ public class CryptoUtils {
         return null;
     }
 
+    public static byte[] aesCtrCrypt(byte[] key, byte[] nonce, byte[] input) {
+        if (key == null || key.length != 32) {
+            throw new IllegalArgumentException("AES-CTR requires a 256-bit key");
+        }
+        if (nonce == null || nonce.length != 16) {
+            throw new IllegalArgumentException("AES-CTR requires a 128-bit counter");
+        }
+        if (input == null) {
+            throw new IllegalArgumentException("AES-CTR input is null");
+        }
+        try {
+            Cipher cipher = Cipher.getInstance("AES/CTR/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE,
+                    new SecretKeySpec(key, "AES"),
+                    new IvParameterSpec(nonce));
+            return cipher.doFinal(input);
+        } catch (Exception e) {
+            throw new IllegalStateException("AES-CTR operation failed", e);
+        }
+    }
+
     /**
      * AES-GCM authenticated encryption for sealed protection payloads.
      * The returned bytes are ciphertext || 16-byte authentication tag; callers persist
