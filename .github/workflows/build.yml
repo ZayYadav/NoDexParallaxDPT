@@ -253,7 +253,52 @@ jobs:
             fi
 
             EXPORTS=$("$NM" -D --defined-only "$SO" | awk '{print $3}' | sed '/^$/d' | sort -u)
-            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|PARALLAX_UNKNOWN_DATA|Java_Parallax_Enc_CrackWarTeamMC_(hvi|hvv)[0-4])$' || true)
+            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|Java_Parallax_Enc_CrackWarTeamMC_(hvi|hvv)[0-4]) || true)
+            if [ -n "$UNEXPECTED" ]; then
+              echo "Unexpected exported native symbols in $SO:" >&2
+              printf '%s\n' "$UNEXPECTED" >&2
+              exit 1
+            fi
+            printf '%s\n' "$EXPORTS" | grep -qx 'JNI_OnLoad' || {
+              echo "JNI_OnLoad is not exported in $SO" >&2
+              exit 1
+            }
+            for kind in hvi hvv; do
+              for n in $(seq 0 4); do
+                printf '%s\n' "$EXPORTS" | grep -qx "Java_Parallax_Enc_CrackWarTeamMC_${kind}${n}" || {
+                  echo "Missing CrackWarTeamMC JNI export: ${kind}${n}" >&2
+                  exit 1
+                }
+              done
+            done
+
+            "$READELF" -SW "$SO" | grep -q '[[:space:]]\.psec[[:space:]]' || {
+              echo "Hidden native key section is missing in $SO" >&2
+              exit 1
+            }
+
+            if "$READELF" -SW "$SO" | grep -q '[[:space:]]\.symtab[[:space:]]'; then
+              echo "Release $SO still contains a static symbol table" >&2
+              exit 1
+            fi
+          done
+
+          echo "### Native ELF hardening" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ABIs: armeabi-v7a + arm64-v8a only" >> "$GITHUB_STEP_SUMMARY"
+          echo "- GNU RELRO + BIND_NOW + NX stack: enforced" >> "$GITHUB_STEP_SUMMARY"
+          echo "- dynamic exports: JNI_OnLoad + Parallax.Enc CrackWarTeamMC JNI only; build key is not exported" >> "$GITHUB_STEP_SUMMARY"
+          echo "- static symbol table in release SO: rejected" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: NoDexParallaxDPT-${{ github.sha }}
+          path: |
+            executable/parallax.jar
+            executable/shell-files/**
+          if-no-files-found: error
+          retention-days: 14
+ || true)
             if [ -n "$UNEXPECTED" ]; then
               echo "Unexpected exported native symbols in $SO:" >&2
               printf '%s\n' "$UNEXPECTED" >&2
