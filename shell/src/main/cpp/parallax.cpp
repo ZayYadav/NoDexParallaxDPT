@@ -21,7 +21,7 @@ std::unordered_map<int,std::vector<data::CodeItem *> *> dexMap;
 
 PARALLAX_DATA_SECTION uint8_t DATA_SECTION_BITCODE[] = ".bitcode";
 PARALLAX_DATA_SECTION uint8_t DATA_SECTION_RO_DATA[] = ".rodata";
-KEEP_SYMBOL PARALLAX_DATA_SECTION uint8_t PARALLAX_UNKNOWN_DATA[] = "1234567890abcdef";
+SECTION(".psec") __attribute__((used, visibility("hidden"))) uint8_t PARALLAX_UNKNOWN_DATA[16] = {0x91, 0x2d, 0x7a, 0xc4, 0x38, 0xe1, 0x56, 0xaf, 0x0b, 0xd3, 0x69, 0x84, 0xf2, 0x17, 0x5c, 0xbe};
 
 ShellConfig g_shell_config;
 
