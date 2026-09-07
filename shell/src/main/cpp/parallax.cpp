@@ -7,6 +7,7 @@
 #include "external/json/json.hpp"
 
 #include <memory>
+#include <stdexcept>
 #include <android/api-level.h>
 
 using namespace parallax;
