@@ -3,7 +3,6 @@
 //
 
 #include <mutex>
-#include <unordered_set>
 #include <unordered_map>
 #include <vector>
 #include <sys/prctl.h>
@@ -19,7 +18,6 @@ using namespace parallax;
 
 extern std::unordered_map<int, std::vector<data::CodeItem*>*> dexMap;
 static std::mutex g_dex_mem_mutex;
-static std::unordered_set<uintptr_t> g_writable_dex_bases;
 int g_sdkLevel = 0;
 extern ShellConfig g_shell_config;
 
@@ -40,32 +38,18 @@ static bool looksLikeDex(const uint8_t *begin, size_t size) {
     return begin[0] == 'd' && begin[1] == 'e' && begin[2] == 'x' && begin[3] == '\n';
 }
 
-static bool ensureDexWritable(uint8_t *begin, size_t dexSize) {
+static bool setDexProtection(uint8_t *begin, size_t dexSize, int prot) {
     if (begin == nullptr || dexSize < sizeof(dex::Header)) {
         return false;
     }
-
-    const uintptr_t key = reinterpret_cast<uintptr_t>(begin);
-    std::lock_guard<std::mutex> lock(g_dex_mem_mutex);
-    if (g_writable_dex_bases.find(key) != g_writable_dex_bases.end()) {
-        return true;
-    }
-
-    // mprotect the exact DEX range once. Multiple ART verifier/class-loader threads can
-    // arrive here together when a game starts; serialize this transition to avoid racing
-    // std::map writes and duplicate permission changes.
     for (int attempt = 0; attempt < 3; ++attempt) {
-        int ret = parallax_mprotect(begin, begin + dexSize, PROT_READ | PROT_WRITE);
-        if (ret == 0) {
-            g_writable_dex_bases.insert(key);
-            DLOGD("mprotect dex success, address: %p, size=%zu", begin, dexSize);
+        if (parallax_mprotect(begin, begin + dexSize, prot) == 0) {
             return true;
         }
-        DLOGW("mprotect dex failed, address: %p, attempt=%d, reason=%d",
-              begin, attempt + 1, ret);
     }
     return false;
 }
+
 
 static int resolveInMemoryDexIndex(const uint8_t *begin, size_t dexSize) {
     const auto &dexFiles = getInMemoryDexFiles();
@@ -198,7 +182,8 @@ void patchMethod(uint8_t *begin,
         return;
     }
 
-    if (UNLIKELY(!ensureDexWritable(begin, dexSize))) {
+    std::lock_guard<std::mutex> writeLock(g_dex_mem_mutex);
+    if (UNLIKELY(!setDexProtection(begin, dexSize, PROT_READ | PROT_WRITE))) {
         DLOGW("cannot make protected dex writable: dex=%d", dexIndex);
         reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
         return;
@@ -219,18 +204,35 @@ void patchMethod(uint8_t *begin,
          codeItem->getMethodIdx(), restoreSize, realInsnsPtr,
          (unsigned int)(realInsnsPtr - begin));
 
-    uint32_t xorKey = g_shell_config.insns_xor_key;
+    const uint32_t xorKey = g_shell_config.insns_xor_key;
+    const uint8_t *wrappedScratch = codeItem->getInsns();
+    if (wrappedScratch == nullptr || restoreSize == 0) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        (void) setDexProtection(begin, dexSize, PROT_READ);
+        return;
+    }
+
     if (xorKey == 0) {
-        memcpy(realInsnsPtr, codeItem->getInsns(), restoreSize);
+        memcpy(realInsnsPtr, wrappedScratch, restoreSize);
+        secure_zero(const_cast<uint8_t *>(wrappedScratch), restoreSize);
     } else {
         thread_local std::vector<uint8_t> tmp;
+        if (!tmp.empty()) {
+            secure_zero(tmp.data(), tmp.size());
+        }
         tmp.resize(restoreSize);
-        const uint8_t* enc = codeItem->getInsns();
         for (uint32_t i = 0; i < restoreSize; i++) {
-            uint32_t shift = (i & 3u) << 3u;
-            tmp[i] = static_cast<uint8_t>(enc[i] ^ ((xorKey >> shift) & 0xffu));
+            const uint32_t shift = (i & 3u) << 3u;
+            tmp[i] = static_cast<uint8_t>(
+                    wrappedScratch[i] ^ ((xorKey >> shift) & 0xffu));
         }
         memcpy(realInsnsPtr, tmp.data(), restoreSize);
+        secure_zero(tmp.data(), tmp.size());
+        secure_zero(const_cast<uint8_t *>(wrappedScratch), restoreSize);
+    }
+
+    if (UNLIKELY(!setDexProtection(begin, dexSize, PROT_READ))) {
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
     }
 }
 
