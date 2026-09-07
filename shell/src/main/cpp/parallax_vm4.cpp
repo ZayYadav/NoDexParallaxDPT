@@ -15,7 +15,6 @@
 #include <unordered_set>
 #include <vector>
 
-extern uint8_t PARALLAX_UNKNOWN_DATA[];
 
 namespace {
 
@@ -423,7 +422,7 @@ void loadHighValueVm(JNIEnv *env) {
         const char *buildKey = AY_OBFUSCATE(PARALLAX_BUILD_KEY);
         std::string label = std::string(AY_OBFUSCATE("Parallax/highvalue/vm/encryption/v4/"))
                 + buildKey;
-        auto key = hmac_sha256(PARALLAX_UNKNOWN_DATA, 16,
+        auto key = hmac_sha256(g_parallax_crypto_meta.master_key, 16,
                 reinterpret_cast<const uint8_t *>(label.data()), label.size());
         if (key.size() != 32) break;
         std::string aadText = std::string(AY_OBFUSCATE("Parallax/highvalue/vm/payload/v4/"))
