@@ -56,6 +56,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 public abstract class AndroidPackage {
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final File SECURE_TEMP_ROOT = createSecureTempRoot();
 
     private static File createSecureTempRoot() {
