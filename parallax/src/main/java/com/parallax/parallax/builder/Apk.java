@@ -48,7 +48,7 @@ public class Apk extends AndroidPackage {
     // incompressible, so this ordering gives a meaningful APK-size reduction without
     // weakening the AES-GCM authenticated vault.
     private static final byte[] CODE_ITEM_MAGIC = new byte[] {'P', 'C', 'I', '3'};
-    private static final String CODE_ITEM_KEY_LABEL = "Parallax/codeitem/encryption/v3/";
+    private static final String CODE_ITEM_KEY_LABEL = "Parallax/codeitem/encryption/v3";
     private static final String CODE_ITEM_AAD_PREFIX = "Parallax/codeitem/payload/v3/";
     private static final int CODE_ITEM_LENGTH_SIZE = 4;
     private static final int CODE_ITEM_NONCE_SIZE = 12;
@@ -265,17 +265,12 @@ public class Apk extends AndroidPackage {
             throw new IOException("Protected code-item payload is missing: " + codeItemFile);
         }
 
-        String buildKey = Parallax.getBuildKey();
-        if (buildKey == null || buildKey.isEmpty()) {
-            throw new IOException("Parallax build key is missing; cannot seal code-item payload");
-        }
-
         byte[] plaintext = Files.readAllBytes(codeItemFile.toPath());
         if (plaintext.length < 4) {
             throw new IOException("Protected code-item payload is empty or malformed");
         }
         byte[] compressed = compressCodeItemPayload(plaintext);
-        byte[] payloadKey = CryptoUtils.hmacSha256(encKey, CODE_ITEM_KEY_LABEL + buildKey);
+        byte[] payloadKey = CryptoUtils.hmacSha256(encKey, CODE_ITEM_KEY_LABEL);
         byte[] nonce = new byte[CODE_ITEM_NONCE_SIZE];
         SECURE_RANDOM.nextBytes(nonce);
         byte[] aad = (CODE_ITEM_AAD_PREFIX + plaintext.length)
