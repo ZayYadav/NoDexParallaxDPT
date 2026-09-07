@@ -594,26 +594,24 @@ public abstract class AndroidPackage {
     }
 
     private void writeSoFileCryptKey(File soFile, byte[] rc4key) {
-        try (ReadElf readElf = new ReadElf(soFile)) {
-            ReadElf.Symbol symbol = readElf.getDynamicSymbol(Const.RC4_KEY_SYMBOL);
-            if(symbol == null) {
-                LogUtils.warn("cannot find symbol in %s, no need write key", soFile.getName());
-                return;
-            }
-            else {
-                LogUtils.info("find symbol(%s) in %s", HexUtils.toHexString(symbol.value), soFile.getName());
-            }
-            long value = symbol.value;
-            int shndx = symbol.shndx;
-            List<ReadElf.SectionHeader> sectionHeaders = readElf.getSectionHeaders();
-            ReadElf.SectionHeader sectionHeader = sectionHeaders.get(shndx);
-            long symbolDataOffset = sectionHeader.getOffset() + value - sectionHeader.getAddr();
-            LogUtils.info("write symbol data to %s(%s)", soFile.getName(), HexUtils.toHexString(symbolDataOffset));
-
-            IoUtils.writeFile(soFile.getAbsolutePath(),rc4key,symbolDataOffset);
+        if (rc4key == null || rc4key.length != 16) {
+            throw new IllegalArgumentException("native build key must be exactly 16 bytes");
         }
-        catch (Exception e) {
-            e.printStackTrace();
+        try (ReadElf readElf = new ReadElf(soFile)) {
+            ReadElf.SectionHeader keySection = null;
+            for (ReadElf.SectionHeader section : readElf.getSectionHeaders()) {
+                if (Const.NATIVE_KEY_SECTION.equals(section.getName())) {
+                    keySection = section;
+                    break;
+                }
+            }
+            if (keySection == null || keySection.getSize() < rc4key.length) {
+                throw new IllegalStateException("native key section missing or too small in "
+                        + soFile.getName());
+            }
+            IoUtils.writeFile(soFile.getAbsolutePath(), rc4key, keySection.getOffset());
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to patch hidden native key section", e);
         }
     }
 
