@@ -21,7 +21,17 @@ std::unordered_map<int,std::vector<data::CodeItem *> *> dexMap;
 
 PARALLAX_DATA_SECTION uint8_t DATA_SECTION_BITCODE[] = ".bitcode";
 PARALLAX_DATA_SECTION uint8_t DATA_SECTION_RO_DATA[] = ".rodata";
-SECTION(".psec") __attribute__((used, visibility("hidden"))) uint8_t PARALLAX_UNKNOWN_DATA[16] = {0x91, 0x2d, 0x7a, 0xc4, 0x38, 0xe1, 0x56, 0xaf, 0x0b, 0xd3, 0x69, 0x84, 0xf2, 0x17, 0x5c, 0xbe};
+SECTION(".psec") __attribute__((used, visibility("hidden")))
+ParallaxCryptoMetadata g_parallax_crypto_meta = {
+        {0x91, 0x2d, 0x7a, 0xc4, 0x38, 0xe1, 0x56, 0xaf,
+         0x0b, 0xd3, 0x69, 0x84, 0xf2, 0x17, 0x5c, 0xbe},
+        {0x47, 0xa1, 0x9c, 0x2e, 0x6b, 0xd8, 0x31, 0xf0,
+         0x55, 0x73, 0x0c, 0xe4, 0x92, 0x1f, 0xb6, 0x68},
+        {0x0d, 0x7e, 0x53, 0xc1, 0x29, 0xa4, 0xf8, 0x16,
+         0x65, 0xba, 0x3d, 0x90, 0x42, 0xec, 0x71, 0x5f,
+         0x83, 0x24, 0xd9, 0x0a, 0xb7, 0x6c, 0x38, 0xe2,
+         0x14, 0x95, 0x4b, 0xfa, 0x60, 0x2f, 0xcd, 0x87}
+};
 
 ShellConfig g_shell_config;
 
@@ -586,7 +596,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
             std::string key_material = packageName + keySep + buildKey;
             DLOGD("key material for config key: %s", key_material.c_str());
 
-            auto aes_key = hmac_sha256(PARALLAX_UNKNOWN_DATA,
+            auto aes_key = hmac_sha256(g_parallax_crypto_meta.master_key,
                                        16,
                                        reinterpret_cast<const uint8_t *>(key_material.data()),
                                        key_material.size());
@@ -624,7 +634,7 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
                                         entry_data + authenticated_size);
 
             uint8_t iv[16] = {0};
-            memcpy(iv, PARALLAX_UNKNOWN_DATA, 16);
+            memcpy(iv, g_parallax_crypto_meta.master_key, 16);
             iv[3] = 0x2f;
             iv[9] = 0x76;
             auto decrypted_data = aes_cbc_decrypt(encryption_key.data(), 256, iv,
