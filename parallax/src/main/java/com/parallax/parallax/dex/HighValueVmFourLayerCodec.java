@@ -42,11 +42,7 @@ final class HighValueVmFourLayerCodec {
                                       List<HighValueVmTransformer.Program> programs,
                                       byte[] encKey) throws IOException {
         if (encKey == null || encKey.length != 16) {
-            throw new IOException("Four-layer VM requires the 16-byte APK build key");
-        }
-        String buildKey = Parallax.getBuildKey();
-        if (buildKey == null || buildKey.isEmpty()) {
-            throw new IOException("Parallax build key is missing; cannot seal four-layer VM payload");
+            throw new IOException("Four-layer VM requires the 16-byte per-APK master key");
         }
 
         byte[] raw = serialize(programs);
