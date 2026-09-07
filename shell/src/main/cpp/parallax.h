@@ -58,6 +58,7 @@ void callRealApplicationOnCreate(JNIEnv *env, jclass, jstring realApplicationCla
 
 void init_app(JNIEnv* env,jclass __unused);
 void readCodeItem(uint8_t *data,size_t data_len);
+bool read_shell_config(JNIEnv *env);
 jstring readAppComponentFactory(JNIEnv *env,jclass __unused);
 jstring readApplicationName(JNIEnv *env, jclass __unused);
 jobjectArray makePathElements(JNIEnv* env,const char *pathChs);
