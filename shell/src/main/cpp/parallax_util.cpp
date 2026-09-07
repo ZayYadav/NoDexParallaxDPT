@@ -24,6 +24,13 @@ using namespace parallax;
 
 PARALLAX_DATA_SECTION uint8_t DATA_R_FLAG[] = "r";
 
+namespace {
+constexpr size_t MAX_EMBEDDED_ENTRY_BYTES = 768u * 1024u * 1024u;
+constexpr size_t MAX_DEX_ENTRY_BYTES = 256u * 1024u * 1024u;
+constexpr size_t MAX_TOTAL_DEX_BYTES = 1024u * 1024u * 1024u;
+constexpr size_t MAX_DEX_COUNT = 128u;
+}
+
 std::string find_so_path(const char *so_name) {
     const int MAX_READ_LINE = 10 * 1024;
     char maps_path[128] = {0};
@@ -321,59 +328,70 @@ static uint32_t readZipLength(const uint8_t *data, size_t size) {
 }
 
 
-PARALLAX_ENCRYPT static void
+PARALLAX_ENCRYPT static bool
 writeDexAchieve(const char *dexAchievePath, void *package_addr, size_t package_size) {
-    DLOGD("zipCode open = %s", dexAchievePath);
-    FILE *fp = fopen(dexAchievePath, "wb");
-    if (fp != nullptr) {
-        auto entry = read_zip_file_entry(package_addr, package_size, COMBINE_DEX_FILES_NAME_IN_ZIP);
-        if (entry.has_value()) {
-            auto [entry_data, entry_size] = entry.value();
-            DLOGD("Read classes.dex of size: %lu", (unsigned long) entry_size);
-            uint32_t zipDataLen = readZipLength((uint8_t *) entry_data, entry_size);
-            DLOGD("Extracted zip data length: %u", (unsigned int) zipDataLen);
-
-            if (zipDataLen > 0 && entry_size > zipDataLen + 4) {
-                uint8_t *zipDataStart = (uint8_t *) entry_data + (entry_size - zipDataLen - 4);
-                fwrite(zipDataStart, 1, zipDataLen, fp);
-                DLOGD("Zip file extracted and written successfully.");
-            } else {
-                DLOGE("Invalid zip data length: %u. dex_files_size: %lu", (unsigned int) zipDataLen,
-                      (unsigned long) entry_size);
-            }
-
-            delete[] entry_data;
-        } else {
-            DLOGE("Failed to read classes.dex.");
-        }
-        fclose(fp);
-    } else {
-        DLOGE("WTF! zipCode write fail: %s", strerror(errno));
+    if (dexAchievePath == nullptr || package_addr == nullptr || package_size == 0) {
+        return false;
     }
+
+    auto entry = read_zip_file_entry(
+            package_addr, package_size, COMBINE_DEX_FILES_NAME_IN_ZIP);
+    if (!entry.has_value()) {
+        return false;
+    }
+
+    auto [entry_data, entry_size] = entry.value();
+    std::unique_ptr<uint8_t[]> entry_guard(entry_data);
+    const uint32_t zipDataLen = readZipLength(entry_data, entry_size);
+    if (zipDataLen == 0 || zipDataLen > MAX_EMBEDDED_ENTRY_BYTES
+            || entry_size <= static_cast<size_t>(zipDataLen) + 4u) {
+        return false;
+    }
+
+    uint8_t *zipDataStart = entry_data + (entry_size - zipDataLen - 4u);
+    FILE *fp = fopen(dexAchievePath, "wb");
+    if (fp == nullptr) {
+        return false;
+    }
+    const size_t written = fwrite(zipDataStart, 1, zipDataLen, fp);
+    const int flushResult = fflush(fp);
+    const int fd = fileno(fp);
+    const int syncResult = (fd >= 0) ? fsync(fd) : -1;
+    const int closeResult = fclose(fp);
+    if (written != zipDataLen || flushResult != 0 || syncResult != 0 || closeResult != 0) {
+        (void) unlink(dexAchievePath);
+        return false;
+    }
+    return true;
 }
 
-PARALLAX_ENCRYPT void extractDexesInNeeded(JNIEnv *env, void *package_addr, size_t package_size) {
+PARALLAX_ENCRYPT void extractDexesInNeeded(
+        JNIEnv *env, void *package_addr, size_t package_size) {
     char compressedDexesPathChs[256] = {0};
     getCompressedDexesPath(env, compressedDexesPathChs, ARRAY_LENGTH(compressedDexesPathChs));
 
     char codeCachePathChs[256] = {0};
     getCodeCachePath(env, codeCachePathChs, ARRAY_LENGTH(codeCachePathChs));
+    if (compressedDexesPathChs[0] == '\0' || codeCachePathChs[0] == '\0') {
+        return;
+    }
 
-    if (access(codeCachePathChs, F_OK) == 0) {
-        if (access(compressedDexesPathChs, F_OK) != 0) {
-            writeDexAchieve(compressedDexesPathChs, package_addr, package_size);
-            chmod(compressedDexesPathChs, 0444);
-            DLOGI("%s write finish", compressedDexesPathChs);
-        } else {
-            DLOGI("dex files is achieved!");
+    if (access(codeCachePathChs, F_OK) != 0) {
+        if (mkdir(codeCachePathChs, 0700) != 0 && errno != EEXIST) {
+            return;
         }
-    } else {
-        if (mkdir(codeCachePathChs, 0775) == 0) {
-            writeDexAchieve(compressedDexesPathChs, package_addr, package_size);
-            chmod(compressedDexesPathChs, 0444);
-        } else {
-            DLOGE("WTF! extractDexes cannot make code_cache directory!");
-        }
+    }
+    (void) chmod(codeCachePathChs, 0700);
+
+    // Do not trust a stale cache from an older/tampered package. Recreate it from the
+    // currently mapped, authenticated APK on every protected process start.
+    (void) unlink(compressedDexesPathChs);
+    if (!writeDexAchieve(compressedDexesPathChs, package_addr, package_size)) {
+        (void) unlink(compressedDexesPathChs);
+        return;
+    }
+    if (chmod(compressedDexesPathChs, 0400) != 0) {
+        (void) unlink(compressedDexesPathChs);
     }
 }
 
@@ -431,7 +449,8 @@ readDexZipFromPackage(void *package_addr, size_t package_size) {
     uint32_t zipDataLen = readZipLength(entry_data, entry_size);
     DLOGD("Extracted zip data length: %u", (unsigned int) zipDataLen);
 
-    if (zipDataLen == 0 || entry_size <= zipDataLen + 4) {
+    if (zipDataLen == 0 || zipDataLen > MAX_EMBEDDED_ENTRY_BYTES
+            || entry_size <= static_cast<size_t>(zipDataLen) + 4u) {
         DLOGE("Invalid zip data length: %u. dex_files_size: %lu",
               (unsigned int) zipDataLen, (unsigned long) entry_size);
         delete[] entry_data;
@@ -454,6 +473,7 @@ unzipDexFilesToMemory(uint8_t *zip_addr, size_t zip_size,
         size_t size;
     };
     std::vector<DexEntry> entries;
+    size_t totalDexBytes = 0;
 
     void *mem_stream = mz_stream_mem_create();
     mz_stream_mem_set_buffer(mem_stream, zip_addr, zip_size);
@@ -478,6 +498,13 @@ unzipDexFilesToMemory(uint8_t *zip_addr, size_t zip_size,
 
         int dex_index = classes_dex_index(file_info->filename);
         if (dex_index >= 0 && file_info->uncompressed_size > 0) {
+            const uint64_t declared = static_cast<uint64_t>(file_info->uncompressed_size);
+            if (declared > MAX_DEX_ENTRY_BYTES
+                    || totalDexBytes > MAX_TOTAL_DEX_BYTES - static_cast<size_t>(declared)
+                    || entries.size() >= MAX_DEX_COUNT) {
+                err = MZ_PARAM_ERROR;
+                break;
+            }
             err = mz_zip_entry_read_open(zip_handle, 0, nullptr);
             if (err == MZ_OK) {
                 auto *dex_data = new uint8_t[file_info->uncompressed_size];
@@ -486,6 +513,7 @@ unzipDexFilesToMemory(uint8_t *zip_addr, size_t zip_size,
                 if (bytes_read == file_info->uncompressed_size) {
                     DLOGD("unzip memory dex[%d] %s size=%d",
                           dex_index, file_info->filename, bytes_read);
+                    totalDexBytes += static_cast<size_t>(file_info->uncompressed_size);
                     entries.push_back({dex_index, dex_data,
                                        static_cast<size_t>(file_info->uncompressed_size)});
                 } else {
@@ -516,9 +544,15 @@ unzipDexFilesToMemory(uint8_t *zip_addr, size_t zip_size,
     out_dexes.reserve(entries.size());
     for (auto &e: entries) {
         if (static_cast<int>(out_dexes.size()) != e.index) {
-            DLOGW("unexpected dex index gap, expect=%zu got=%d", out_dexes.size(), e.index);
+            for (auto &owned : entries) {
+                delete[] owned.data;
+                owned.data = nullptr;
+            }
+            out_dexes.clear();
+            return false;
         }
         out_dexes.emplace_back(e.data, e.size);
+        e.data = nullptr;
     }
     return true;
 }
@@ -637,7 +671,9 @@ read_zip_file_entry(void *zip_addr, off_t zip_size, const char *entry_name) {
                     DLOGD("found entry name = %s, file size = " FMT_INT64_T,
                           file_info->filename,
                           file_info->uncompressed_size);
-                    if (file_info->uncompressed_size == 0) {
+                    if (file_info->uncompressed_size <= 0
+                            || static_cast<uint64_t>(file_info->uncompressed_size)
+                                    > MAX_EMBEDDED_ENTRY_BYTES) {
                         break;
                     }
 
@@ -652,12 +688,18 @@ read_zip_file_entry(void *zip_addr, off_t zip_size, const char *entry_name) {
                     uint8_t *entry_data = new uint8_t[file_info->uncompressed_size + 1]();
                     DLOGD("start read: %s", file_info->filename);
 
-                    __unused size_t bytes_read = mz_zip_entry_read(zip_handle, entry_data,
-                                                                   file_info->uncompressed_size);
-
-                    DLOGD("read entry finish: %s, read size: %zu", entry_name, bytes_read);
+                    const int32_t bytes_read = mz_zip_entry_read(
+                            zip_handle, entry_data, file_info->uncompressed_size);
+                    if (bytes_read != file_info->uncompressed_size) {
+                        secure_zero(entry_data,
+                                static_cast<size_t>(file_info->uncompressed_size) + 1u);
+                        delete[] entry_data;
+                        (void) mz_zip_entry_close(zip_handle);
+                        break;
+                    }
+                    (void) mz_zip_entry_close(zip_handle);
                     result_data = entry_data;
-                    result_size = file_info->uncompressed_size;
+                    result_size = static_cast<size_t>(file_info->uncompressed_size);
                     break;
                 } // strncmp
             } else {
