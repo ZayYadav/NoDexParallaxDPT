@@ -160,6 +160,25 @@ public class Parallax {
             String filePath = commandLine.getOptionValue(Const.OPTION_INPUT_FILE);
             HighValueVmCoordinator.setRulesPath(commandLine.getOptionValue(OPTION_HIGH_VALUE_METHODS));
 
+            if (filePath.endsWith(".apk")) {
+                boolean unsafeApkMode = commandLine.hasOption(Const.OPTION_NO_SIGN_PACKAGE)
+                        || commandLine.hasOption(Const.OPTION_DEBUGGABLE_LONG)
+                        || commandLine.hasOption(Const.OPTION_DISABLE_APP_COMPONENT_FACTORY_LONG)
+                        || commandLine.hasOption(Const.OPTION_DISABLE_FRIDA_DETECT_LONG)
+                        || commandLine.hasOption(Const.OPTION_DISABLE_CRC_DETECT_LONG)
+                        || commandLine.hasOption(Const.OPTION_DISABLE_ANTI_DEBUG_LONG)
+                        || commandLine.hasOption(Const.OPTION_DUMP_CODE_LONG)
+                        || commandLine.hasOption(Const.OPTION_KEEP_CLASSES)
+                        || commandLine.hasOption(Const.OPTION_SMALLER)
+                        || commandLine.hasOption(Const.OPTION_DO_NOT_PROTECT_CLASSES_RULES);
+                if (unsafeApkMode) {
+                    usage(options,
+                            "Ultra APK mode is fail-closed: debug/no-sign/security-disable/dump/"
+                                    + "keep-classes/smaller/exclusion options are not permitted.");
+                    return null;
+                }
+            }
+
             int riskCheckFlags = 0;
             if (commandLine.hasOption(Const.OPTION_DISABLE_FRIDA_DETECT_LONG)) {
                 riskCheckFlags |= Const.FLAG_DISABLE_FRIDA_DETECT;
