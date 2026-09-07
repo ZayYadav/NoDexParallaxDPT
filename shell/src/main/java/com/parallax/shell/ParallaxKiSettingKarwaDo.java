@@ -198,7 +198,13 @@ public final class ParallaxKiSettingKarwaDo extends Application
             if (securityReason != 0) return false;
 
             ia();
+            securityReason |= securityStatus(null);
+            if (securityReason != 0) return false;
+
             cbde(classLoader);
+            securityReason |= securityStatus(null);
+            if (securityReason != 0) return false;
+
             realApplicationName = rapn();
             realComponentFactoryName = rcf();
             classLoaderReady = true;
@@ -228,13 +234,21 @@ public final class ParallaxKiSettingKarwaDo extends Application
                     break;
                 case 0x33:
                     securityReason = securityStatus(base);
+                    if (securityReason == 0) {
+                        ia();
+                        securityReason |= securityStatus(base);
+                    }
                     state = securityReason != 0 ? nextState(0x66, 0x76) : nextState(0x44, 0x74);
-                    if (securityReason == 0) ia();
                     break;
                 case 0x44:
                     cbde(base.getClassLoader());
-                    classLoaderReady = true;
-                    state = nextState(0x55, 0x75);
+                    securityReason |= securityStatus(base);
+                    if (securityReason == 0) {
+                        classLoaderReady = true;
+                        state = nextState(0x55, 0x75);
+                    } else {
+                        state = nextState(0x66, 0x76);
+                    }
                     break;
                 case 0x55:
                     realApplicationName = rapn();
