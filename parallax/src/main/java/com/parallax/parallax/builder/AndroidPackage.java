@@ -516,51 +516,52 @@ public abstract class AndroidPackage {
     }
 
     public void copyNativeLibs(String packageDir) {
-        File sourceDirRoot = new File(FileUtils.getExecutablePath(), "shell-files" + File.separator + "libs");
-        File destDirRoot = new File(getOutAssetsDir(packageDir).getAbsolutePath(), Const.KEY_LIBS_DIR_NAME);
+        File sourceDirRoot = new File(FileUtils.getExecutablePath(),
+                "shell-files" + File.separator + "libs");
+        File destDirRoot = new File(getOutAssetsDir(packageDir).getAbsolutePath(),
+                Const.KEY_LIBS_DIR_NAME);
 
-        if (!destDirRoot.exists()) {
-            destDirRoot.mkdirs();
-        }
-
-        File[] abiDirs = sourceDirRoot.listFiles();
-        if (abiDirs == null) {
-            return;
-        }
-
-        for (File abiDir : abiDirs) {
-            if (!abiDir.isDirectory()) {
-                continue;
+        try {
+            Files.createDirectories(destDirRoot.toPath());
+            File[] abiDirs = sourceDirRoot.listFiles(File::isDirectory);
+            if (abiDirs == null || abiDirs.length == 0) {
+                throw new IOException("shell native library source is missing");
             }
 
-            String abiName = abiDir.getName();
+            int copied = 0;
+            for (File abiDir : abiDirs) {
+                String abiName = abiDir.getName();
+                if (excludedAbi != null && excludedAbi.contains(abiName)) {
+                    LogUtils.info("Skipping excluded ABI: " + abiName);
+                    continue;
+                }
 
-            if (excludedAbi != null && excludedAbi.contains(abiName)) {
-                LogUtils.info("Skipping excluded ABI: " + abiName);
-                continue;
-            }
+                File destAbiDir = new File(destDirRoot, abiName);
+                Files.createDirectories(destAbiDir.toPath());
 
-            File destAbiDir = new File(destDirRoot, abiName);
-            if (!destAbiDir.exists()) {
-                destAbiDir.mkdirs();
-            }
+                File[] libFiles = abiDir.listFiles();
+                if (libFiles == null) {
+                    throw new IOException("cannot enumerate shell ABI: " + abiName);
+                }
 
-            File[] libFiles = abiDir.listFiles();
-            if (libFiles == null) {
-                continue;
-            }
-
-            for (File libFile : libFiles) {
-                if (libFile.isFile() && libFile.getName().endsWith(".so")) {
-                    File destFile = new File(destAbiDir, libFile.getName());
-                    try {
+                for (File libFile : libFiles) {
+                    if (libFile.isFile() && libFile.getName().endsWith(".so")) {
+                        File destFile = new File(destAbiDir, libFile.getName());
                         Files.copy(libFile.toPath(), destFile.toPath(),
                                 StandardCopyOption.REPLACE_EXISTING);
-                    } catch (IOException e) {
-                        LogUtils.error("Failed to copy library: " + e.getMessage());
+                        if (!destFile.isFile() || destFile.length() != libFile.length()) {
+                            throw new IOException("native library copy verification failed");
+                        }
+                        copied++;
                     }
                 }
             }
+
+            if (copied == 0) {
+                throw new IOException("no native shell libraries copied");
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("native shell copy failed closed", e);
         }
     }
 
