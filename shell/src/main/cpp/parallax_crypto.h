@@ -24,6 +24,12 @@ std::vector<uint8_t> aes_cbc_decrypt(const uint8_t *key,
                                      const uint8_t *in,
                                      size_t inlen);
 
+std::vector<uint8_t> aes_ctr_crypt(const uint8_t *key,
+                                  size_t key_bits,
+                                  const uint8_t *nonce_counter,
+                                  const uint8_t *in,
+                                  size_t inlen);
+
 std::vector<uint8_t> aes_gcm_decrypt(const uint8_t *key,
                                      size_t key_bits,
                                      const uint8_t *nonce,
