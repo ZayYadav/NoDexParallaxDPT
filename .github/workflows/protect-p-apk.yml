@@ -281,6 +281,16 @@ jobs:
           echo "- Output: P-Parallax-Protected.apk" >> "$GITHUB_STEP_SUMMARY"
           echo "- Size: $(stat -c '%s' "$FINAL_DIR/P-Parallax-Protected.apk") bytes" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Verify original DEX is absent from static APK surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_protected_apk.py \
+            "$RUNNER_TEMP/P.apk" \
+            "$GITHUB_WORKSPACE/protected-artifact/P-Parallax-Protected.apk"
+          echo "- Original source class definitions in static DEX: none" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Plaintext secondary DEX entries: none" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify protected APK signature and release policy
         shell: bash
         run: |
