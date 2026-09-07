@@ -685,10 +685,18 @@ public abstract class AndroidPackage {
         }
     }
 
-    public void deleteAllDexFiles(String packageDir){
+    public void deleteAllDexFiles(String packageDir) {
         List<File> dexFiles = getDexFiles(getDexDir(packageDir));
         for (File dexFile : dexFiles) {
-            dexFile.delete();
+            try {
+                Files.deleteIfExists(dexFile.toPath());
+            } catch (IOException e) {
+                throw new IllegalStateException("cannot remove hollowed source DEX: "
+                        + dexFile.getName(), e);
+            }
+        }
+        if (!getDexFiles(getDexDir(packageDir)).isEmpty()) {
+            throw new IllegalStateException("source DEX files remain after mandatory deletion");
         }
     }
 
