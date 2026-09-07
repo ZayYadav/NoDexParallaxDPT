@@ -204,27 +204,27 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
     m_source_buffer = buffer;
     m_source_size = size;
 
-    // Release builds accept authenticated PCI3 (compressed-before-encryption) and PCI2
-    // for compatibility with already-protected packages. Raw/plain sidecars fail closed.
-    if (!isSealedCodeItem(buffer, size)) {
+    // Ultra release accepts only PCI3: compressed + AES-GCM authenticated. Older PCI2
+    // envelopes are deliberately rejected to prevent a protection downgrade.
 #ifdef DEBUG
+    if (!isCompressedSealedCodeItem(buffer, size)) {
         DLOGW("debug build accepted legacy plaintext code-item payload");
         m_buffer = buffer;
         m_size = size;
         return;
+    }
 #else
-        DLOGE("missing PCI3/PCI2 protected code-item envelope");
+    if (!isCompressedSealedCodeItem(buffer, size)) {
+        DLOGE("PCI3 protected method-vault envelope required");
         reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
         m_buffer = const_cast<uint8_t *>(INVALID_CODE_ITEM_BUFFER);
         m_size = sizeof(INVALID_CODE_ITEM_BUFFER);
         return;
-#endif
     }
+#endif
 
-    const bool compressedV3 = isCompressedSealedCodeItem(buffer, size);
-    const char *keyMaterial = compressedV3
-            ? AY_OBFUSCATE("Parallax/codeitem/encryption/v3")
-            : AY_OBFUSCATE("Parallax/codeitem/encryption/v2");
+    const bool compressedV3 = true;
+    const char *keyMaterial = AY_OBFUSCATE("Parallax/codeitem/encryption/v3");
     auto payloadKey = hmac_sha256(
             g_parallax_crypto_meta.master_key,
             16,
@@ -258,8 +258,6 @@ void parallax::data::MultiDexCode::init(uint8_t* buffer, size_t size){
         }
         aadString = std::string(AY_OBFUSCATE("Parallax/codeitem/payload/v3/"))
                     + std::to_string(originalPlaintextSize);
-    } else {
-        aadString = AY_OBFUSCATE("Parallax/codeitem/payload/v2");
     }
 
     if (payloadOffset + CODE_ITEM_NONCE_SIZE + CODE_ITEM_GCM_TAG_SIZE >= size) {
