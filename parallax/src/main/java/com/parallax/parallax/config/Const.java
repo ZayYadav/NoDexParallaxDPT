@@ -53,11 +53,6 @@ public class Const {
     public static final int FLAG_DISABLE_CRC_DETECT = 1 << 1;
     public static final int FLAG_DISABLE_ANTI_DEBUG = 1 << 2;
 
-    public static final String KEY_STORE_ASSET_NAME = "parallax.jks";
-    public static final String KEY_STORE_ASSET_PATH = "assets/" + KEY_STORE_ASSET_NAME;
-    public static final String STORE_PASSWORD = "android";
-    public static final String KEY_PASSWORD = "android";
-    public static final String KEY_ALIAS = "key0";
     public static final String DEFAULT_THREAD_NAME = "parallax";
 
     public static final String ROOT_OF_OUT_DIR = System.getProperty("java.io.tmpdir");
