@@ -48,6 +48,7 @@ static JNINativeMethod gMethods[] = {
         {"ra", "(Ljava/lang/String;)Ljava/lang/Object;",                               (void *) replaceApplication},
         {"clinit", "()V",                               (void *) clinit},
         {"securityStatus", "(Landroid/content/Context;)I",                (void *) securityStatus},
+        {"vsd", "(Ljava/lang/String;)Z",                               (void *) verifySourceSignerDigest},
         {"scheduleExit", "(I)V",                                         (void *) scheduleExit}
 };
 
@@ -469,8 +470,10 @@ PARALLAX_ENCRYPT jobject replaceApplicationOnLoadedApk(JNIEnv *env, jclass __unu
 
 PARALLAX_ENCRYPT static bool registerNativeMethods(JNIEnv *env) {
     jclass JniBridgeClass = env->FindClass(g_shell_config.jni_class_name.c_str());
-    if(JniBridgeClass == nullptr) {
-        DLOGF("cannot find class: %s!", g_shell_config.jni_class_name.c_str());
+    if (JniBridgeClass == nullptr || env->ExceptionCheck()) {
+        env->ExceptionClear();
+        reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+        return JNI_FALSE;
     }
     if (env->RegisterNatives(JniBridgeClass, gMethods, sizeof(gMethods) / sizeof(gMethods[0])) ==
         0) {
@@ -727,6 +730,30 @@ PARALLAX_ENCRYPT bool read_shell_config(JNIEnv *env) {
     return loaded;
 }
 
+
+
+PARALLAX_ENCRYPT jboolean verifySourceSignerDigest(
+        JNIEnv *env, jclass, jstring digest) {
+    if (digest == nullptr || g_shell_config.app_sign_sha256.size() != 64) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return JNI_FALSE;
+    }
+    const char *actual = env->GetStringUTFChars(digest, nullptr);
+    if (actual == nullptr) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return JNI_FALSE;
+    }
+    const size_t actualLength = strlen(actual);
+    const bool matches = actualLength == 64
+            && parallax_strncasecmp(
+                    actual, g_shell_config.app_sign_sha256.c_str(), 64) == 0;
+    env->ReleaseStringUTFChars(digest, actual);
+    if (!matches) {
+        reportSecurityRisk(PARALLAX_SECURITY_PAYLOAD_TAMPER_BIT);
+        return JNI_FALSE;
+    }
+    return JNI_TRUE;
+}
 
 void veritySignature(JNIEnv *env) {
     if (!g_shell_config.app_sign_sha256.empty()) {
