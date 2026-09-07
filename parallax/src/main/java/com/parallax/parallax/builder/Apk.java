@@ -390,27 +390,6 @@ public class Apk extends AndroidPackage {
         }
     }
 
-    /**
-     * Zero-DEX APKs are already native-only packages. Injecting the Java shell into such
-     * an APK would turn it into a DEX package and can also break a NativeActivity-style
-     * lifecycle. Preserve the original manifest, native libraries and resources and only
-     * run the package finalization pipeline (optional debug flag, zipalign and signing).
-     *
-     * This mode deliberately does not pretend to apply DEX hollowing: there is no DEX
-     * payload to transform. The important invariant is that a zero-DEX input stays
-     * zero-DEX in the output.
-     */
-    private static void processZeroDexApk(Apk apk, File apkFile, String apkMainProcessPath) {
-        LogUtils.info("Native-only APK detected: no classes*.dex found.");
-        LogUtils.info("Zero-DEX mode: preserving manifest/components/libs; shell DEX injection is skipped.");
-
-        if (apk.isDebuggable()) {
-            LogUtils.info("Make zero-DEX apk debuggable.");
-            apk.setDebuggable(apkMainProcessPath, true);
-        }
-
-        apk.buildPackage(apkFile.getAbsolutePath(), apkMainProcessPath, FileUtils.getUserDir());
-    }
 
     private static void process(Apk apk) {
         File apkFile = new File(apk.getFilePath());
@@ -426,16 +405,13 @@ public class Apk extends AndroidPackage {
         // shell manifest rewrite, shell library copy, encrypted config write or stub DEX
         // generation.
         if (apk.getDexFiles(apk.getDexDir(apkMainProcessPath)).isEmpty()) {
-            try {
-                processZeroDexApk(apk, apkFile, apkMainProcessPath);
-            } finally {
-                File workspace = new File(apkMainProcessPath);
-                if (workspace.exists()) {
-                    FileUtils.deleteRecurse(workspace);
-                }
+            File workspace = new File(apkMainProcessPath);
+            if (workspace.exists()) {
+                FileUtils.deleteRecurse(workspace);
             }
-            LogUtils.info("All done (zero-DEX mode).");
-            return;
+            throw new IllegalStateException(
+                    "Ultra protection refuses zero-DEX/native-only APKs because the DEX shell "
+                            + "and method-vault guarantees cannot be applied.");
         }
 
         byte[] encKey = KeyUtils.generateKey();
