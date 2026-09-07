@@ -205,7 +205,7 @@ public final class HighValueVmTransformer {
                 Program program = compile(nextId, signature, method);
                 methods.add(rewriteAsTrampoline(method, nextId, bridgeClassSig));
                 programs.add(program);
-                LogUtils.info("High-value VM: moved %s -> native VM id=%d", signature, nextId);
+                LogUtils.noisy("High-value VM route applied: %s -> native VM id=%d", signature, nextId);
                 nextId++;
             }
             rewrittenClasses.add(new ImmutableClassDef(
