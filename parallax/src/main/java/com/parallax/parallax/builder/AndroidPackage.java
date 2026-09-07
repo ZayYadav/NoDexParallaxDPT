@@ -562,60 +562,107 @@ public abstract class AndroidPackage {
         }
     }
 
-    public void encryptSoFiles(String packageOutDir, byte[] rc4Key){
-        File obfDir = new File(getOutAssetsDir(packageOutDir).getAbsolutePath() + File.separator, Const.KEY_LIBS_DIR_NAME);
-        File[] soAbiDirs = obfDir.listFiles();
-        if(soAbiDirs == null) {
-            return;
+    public void encryptSoFiles(String packageOutDir, byte[] masterKey) {
+        if (masterKey == null || masterKey.length != 16) {
+            throw new IllegalArgumentException("native master key must be exactly 16 bytes");
         }
 
+        File obfDir = new File(getOutAssetsDir(packageOutDir).getAbsolutePath()
+                + File.separator, Const.KEY_LIBS_DIR_NAME);
+        File[] soAbiDirs = obfDir.listFiles(File::isDirectory);
+        if (soAbiDirs == null || soAbiDirs.length == 0) {
+            throw new IllegalStateException("no native shell ABI directories found");
+        }
+
+        int encryptedCount = 0;
         for (File soAbiDir : soAbiDirs) {
             File[] soFiles = soAbiDir.listFiles();
-            if(soFiles == null) {
-                continue;
+            if (soFiles == null) {
+                throw new IllegalStateException("cannot enumerate native shell directory");
             }
 
             for (File soFile : soFiles) {
-                if(!soFile.getAbsolutePath().endsWith(".so")) {
+                if (!soFile.isFile() || !soFile.getName().endsWith(".so")) {
                     continue;
                 }
-                encryptSoFile(soFile, rc4Key);
-                writeSoFileCryptKey(soFile, rc4Key);
+                byte[] metadata = encryptSoFileAuthenticated(soFile, masterKey);
+                writeSoCryptoMetadata(soFile, metadata);
+                Arrays.fill(metadata, (byte) 0);
+                encryptedCount++;
             }
         }
 
+        if (encryptedCount == 0) {
+            throw new IllegalStateException("no native shell libraries were encrypted");
+        }
     }
 
-    private void encryptSoFile(File soFile, byte[] rc4Key) {
+    private byte[] encryptSoFileAuthenticated(File soFile, byte[] masterKey) {
+        byte[] encryptionKey = null;
+        byte[] authenticationKey = null;
+        byte[] nonce = null;
+        byte[] bitcode = null;
+        byte[] ciphertext = null;
+        byte[] authInput = null;
+        byte[] tag = null;
         try (ReadElf readElf = new ReadElf(soFile)) {
-            List<ReadElf.SectionHeader> sectionHeaders = readElf.getSectionHeaders();
-            for (ReadElf.SectionHeader sectionHeader : sectionHeaders) {
-                if(".bitcode".equals(sectionHeader.getName())) {
-                    LogUtils.noisy("encrypt native section: %s section=%s offset=%s size=%s",
-                            soFile.getAbsolutePath(),
-                            sectionHeader.getName(),
-                            HexUtils.toHexString(sectionHeader.getOffset()),
-                            sectionHeader.getSize()
-                    );
-
-                    byte[] bitcode = IoUtils.readFile(soFile.getAbsolutePath(),
-                            sectionHeader.getOffset(),
-                            (int)sectionHeader.getSize()
-                    );
-
-                    byte[] enc = CryptoUtils.rc4Crypt(rc4Key, bitcode);
-                    IoUtils.writeFile(soFile.getAbsolutePath(),enc,sectionHeader.getOffset());
+            ReadElf.SectionHeader bitcodeSection = null;
+            for (ReadElf.SectionHeader sectionHeader : readElf.getSectionHeaders()) {
+                if (".bitcode".equals(sectionHeader.getName())) {
+                    bitcodeSection = sectionHeader;
+                    break;
                 }
             }
-        }
-        catch (Exception e) {
-            e.printStackTrace();
+            if (bitcodeSection == null || bitcodeSection.getSize() <= 0
+                    || bitcodeSection.getSize() > Integer.MAX_VALUE) {
+                throw new IllegalStateException("encrypted runtime section missing or invalid in "
+                        + soFile.getName());
+            }
+
+            LogUtils.noisy("seal native runtime: %s size=%s",
+                    soFile.getName(), bitcodeSection.getSize());
+
+            bitcode = IoUtils.readFile(soFile.getAbsolutePath(),
+                    bitcodeSection.getOffset(), (int) bitcodeSection.getSize());
+            encryptionKey = CryptoUtils.hmacSha256(masterKey,
+                    "Parallax/bitcode/encryption/v2");
+            authenticationKey = CryptoUtils.hmacSha256(masterKey,
+                    "Parallax/bitcode/authentication/v2");
+            nonce = new byte[16];
+            SECURE_RANDOM.nextBytes(nonce);
+
+            ciphertext = CryptoUtils.aesCtrCrypt(encryptionKey, nonce, bitcode);
+            authInput = new byte[nonce.length + ciphertext.length];
+            System.arraycopy(nonce, 0, authInput, 0, nonce.length);
+            System.arraycopy(ciphertext, 0, authInput, nonce.length, ciphertext.length);
+            tag = CryptoUtils.hmacSha256(authenticationKey, authInput);
+            if (tag.length != 32) {
+                throw new IllegalStateException("unexpected native authentication tag length");
+            }
+
+            IoUtils.writeFile(soFile.getAbsolutePath(), ciphertext, bitcodeSection.getOffset());
+
+            byte[] metadata = new byte[64];
+            System.arraycopy(masterKey, 0, metadata, 0, 16);
+            System.arraycopy(nonce, 0, metadata, 16, 16);
+            System.arraycopy(tag, 0, metadata, 32, 32);
+            return metadata;
+        } catch (Exception e) {
+            throw new IllegalStateException("authenticated native runtime sealing failed", e);
+        } finally {
+            if (encryptionKey != null) Arrays.fill(encryptionKey, (byte) 0);
+            if (authenticationKey != null) Arrays.fill(authenticationKey, (byte) 0);
+            if (nonce != null) Arrays.fill(nonce, (byte) 0);
+            if (bitcode != null) Arrays.fill(bitcode, (byte) 0);
+            if (ciphertext != null) Arrays.fill(ciphertext, (byte) 0);
+            if (authInput != null) Arrays.fill(authInput, (byte) 0);
+            if (tag != null) Arrays.fill(tag, (byte) 0);
         }
     }
 
-    private void writeSoFileCryptKey(File soFile, byte[] rc4key) {
-        if (rc4key == null || rc4key.length != 16) {
-            throw new IllegalArgumentException("native build key must be exactly 16 bytes");
+    private void writeSoCryptoMetadata(File soFile, byte[] metadata) {
+        if (metadata == null || metadata.length != 64) {
+            throw new IllegalArgumentException("native crypto metadata must be 64 bytes");
         }
         try (ReadElf readElf = new ReadElf(soFile)) {
             ReadElf.SectionHeader keySection = null;
@@ -625,13 +672,13 @@ public abstract class AndroidPackage {
                     break;
                 }
             }
-            if (keySection == null || keySection.getSize() < rc4key.length) {
-                throw new IllegalStateException("native key section missing or too small in "
+            if (keySection == null || keySection.getSize() < metadata.length) {
+                throw new IllegalStateException("native crypto metadata section missing or too small in "
                         + soFile.getName());
             }
-            IoUtils.writeFile(soFile.getAbsolutePath(), rc4key, keySection.getOffset());
+            IoUtils.writeFile(soFile.getAbsolutePath(), metadata, keySection.getOffset());
         } catch (Exception e) {
-            throw new IllegalStateException("failed to patch hidden native key section", e);
+            throw new IllegalStateException("failed to patch hidden native crypto metadata", e);
         }
     }
 
