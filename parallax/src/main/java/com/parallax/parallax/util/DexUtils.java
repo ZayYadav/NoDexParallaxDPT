@@ -240,29 +240,40 @@ public class DexUtils {
                                                       File outDexFile,
                                                       String packageName,
                                                       boolean dumpCode,
-                                                      boolean smaller) {
+                                                      boolean obfuscateIns) {
         List<Instruction> instructionList = new ArrayList<>();
-        Dex dex = null;
-        RandomAccessFile randomAccessFile = null;
-        byte[] dexData = IoUtils.readFile(dexFile.getAbsolutePath());
-        IoUtils.writeFile(outDexFile.getAbsolutePath(),dexData);
         JSONArray dumpJSON = new JSONArray();
-        try {
-            dex = new Dex(dexFile);
+        Map<Integer, Instruction> extractedByCodeOffset = new HashMap<>();
+
+        byte[] dexData = IoUtils.readFile(dexFile.getAbsolutePath());
+        if (dexData == null || dexData.length == 0) {
+            throw new DexException("Source DEX is empty: " + dexFile.getName());
+        }
+        IoUtils.writeFile(outDexFile.getAbsolutePath(), dexData);
+        Arrays.fill(dexData, (byte) 0);
+
+        try (RandomAccessFile randomAccessFile = new RandomAccessFile(outDexFile, "rw")) {
+            Dex dex = new Dex(dexFile);
             int dexNumber = getDexNumber(dexFile.getName());
-            randomAccessFile = new RandomAccessFile(outDexFile, "rw");
-            Iterable<ClassDef> classDefs = dex.classDefs();
+            if (dexNumber < 0) {
+                throw new DexException("Invalid DEX number: " + dexFile.getName());
+            }
 
-            saveCodeOffAppear(dex, dexNumber);
+            String appPrefix = packageName == null || packageName.isEmpty()
+                    ? ""
+                    : "L" + packageName.replace('.', '/') + "/";
 
-            for (ClassDef classDef : classDefs) {
-                // Skip exclude classes name
-                if(ProtectRules.getInstance().matchRules(classDef.toString())) {
+            for (ClassDef classDef : dex.classDefs()) {
+                String className = dex.typeNames().get(classDef.getTypeIndex());
+                boolean appOwned = !appPrefix.isEmpty() && className.startsWith(appPrefix);
+
+                // Compatibility exclusions are allowed only for third-party/framework
+                // classes. App-owned classes are always hollowed in ultra mode.
+                if (!appOwned && ProtectRules.getInstance().matchRules(classDef.toString())) {
                     continue;
                 }
 
-                if(classDef.getClassDataOffset() == 0) {
-                    LogUtils.noisy("class '%s' data offset is zero", classDef.toString());
+                if (classDef.getClassDataOffset() == 0) {
                     continue;
                 }
 
@@ -270,36 +281,59 @@ public class DexUtils {
                 JSONArray classJSONArray = new JSONArray();
                 ClassData classData = dex.readClassData(classDef);
 
-                String className = dex.typeNames().get(classDef.getTypeIndex());
-                String humanizeTypeName = TypeUtils.getHumanizeTypeName(className);
-
-                ClassData.Method[] methods = classData.allMethods();
-                for (ClassData.Method method : methods) {
-                    if(getCodeOffAppearCount(dexNumber, method.getCodeOffset()) > 1) {
-                        LogUtils.noisy("codeoff 0x%x appear many times", method.getCodeOffset());
+                for (ClassData.Method methodEntry : classData.allMethods()) {
+                    if (methodEntry.getCodeOffset() == 0) {
+                        // Native/abstract methods have no executable DEX body to leak.
                         continue;
                     }
 
-                    Instruction instruction = extractMethod(dex, randomAccessFile, classDef, method, smaller);
-                    if(instruction != null) {
-                        instructionList.add(instruction);
-                        putToJSON(classJSONArray, instruction);
+                    Instruction prior = extractedByCodeOffset.get(methodEntry.getCodeOffset());
+                    Instruction instruction;
+                    if (prior != null) {
+                        // DEX permits multiple method_ids to reference the same code_item.
+                        // The physical body was already hollowed once; create an additional
+                        // vault mapping for this method_idx so runtime restoration remains
+                        // correct for every alias without preserving the original bytes.
+                        instruction = new Instruction();
+                        instruction.setMethodIndex(methodEntry.getMethodIndex());
+                        instruction.setInstructionDataSize(prior.getInstructionDataSize());
+                        instruction.setInstructionsData(
+                                Arrays.copyOf(prior.getInstructionsData(),
+                                        prior.getInstructionsData().length));
+                    } else {
+                        instruction = extractMethod(
+                                dex, randomAccessFile, classDef, methodEntry, obfuscateIns);
+                        if (instruction == null) {
+                            throw new DexException(
+                                    "Concrete method cannot be safely hollowed: "
+                                            + className + " method_idx="
+                                            + methodEntry.getMethodIndex());
+                        }
+                        extractedByCodeOffset.put(methodEntry.getCodeOffset(), instruction);
                     }
+
+                    instructionList.add(instruction);
+                    putToJSON(classJSONArray, instruction);
                 }
 
-                classJSONObject.put(humanizeTypeName,classJSONArray);
+                classJSONObject.put(TypeUtils.getHumanizeTypeName(className), classJSONArray);
                 dumpJSON.put(classJSONObject);
             }
-        }
-        catch (Exception e){
-        }
-        finally {
-            IoUtils.close(randomAccessFile);
-            if(dumpCode) {
-                dumpJSON(packageName,dexFile, dumpJSON);
+        } catch (Exception e) {
+            try {
+                Files.deleteIfExists(outDexFile.toPath());
+            } catch (IOException ignored) {
+            }
+            throw new DexException("Cannot hollow DEX " + dexFile.getName() + ": " + e.getMessage());
+        } finally {
+            if (dumpCode) {
+                dumpJSON(packageName, dexFile, dumpJSON);
             }
         }
 
+        if (!outDexFile.isFile() || outDexFile.length() == 0) {
+            throw new DexException("Hollowed DEX output is missing: " + dexFile.getName());
+        }
         return instructionList;
     }
 
