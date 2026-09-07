@@ -38,7 +38,6 @@ jar {
     manifest {
         attributes("Implementation-Title": archiveBaseName,
                 "Implementation-Version": archiveVersion,
-                "Parallax-Build-Key": parallaxBuildKey,
                 "Build-Time": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
                 "Build-Number": System.env.BUILD_NUMBER ? System.env.BUILD_NUMBER : "-1",
         )
