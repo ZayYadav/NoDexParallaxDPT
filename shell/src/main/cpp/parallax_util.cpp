@@ -14,6 +14,7 @@
 #include <cctype>
 #include <vector>
 #include <optional>
+#include <memory>
 #include <sys/syscall.h>
 #include <sys/uio.h>
 
