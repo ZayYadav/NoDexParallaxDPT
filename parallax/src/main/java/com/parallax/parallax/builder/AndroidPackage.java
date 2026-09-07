@@ -50,8 +50,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 public abstract class AndroidPackage {
     private static final File SECURE_TEMP_ROOT = createSecureTempRoot();
@@ -721,119 +723,150 @@ public abstract class AndroidPackage {
 
     public void extractDexCode(String packageDir, String dexCodeSavePath) {
         List<File> dexFiles = getDexFiles(getDexDir(packageDir));
-        Map<Integer,List<Instruction>> instructionMap = new HashMap<>();
-        String appNameNew = Const.KEY_CODE_ITEM_STORE_NAME;
-        String dataOutputPath = dexCodeSavePath + File.separator + appNameNew;
+        if (dexFiles.isEmpty()) {
+            throw new IllegalStateException("no DEX files found for protection");
+        }
+
+        Map<Integer, List<Instruction>> instructionMap = new ConcurrentHashMap<>();
+        String dataOutputPath = dexCodeSavePath + File.separator + Const.KEY_CODE_ITEM_STORE_NAME;
 
         CountDownLatch countDownLatch = new CountDownLatch(dexFiles.size());
         AtomicInteger totalClassesCount = new AtomicInteger(0);
         AtomicInteger keepClassesCount = new AtomicInteger(0);
+        AtomicReference<Throwable> extractionFailure = new AtomicReference<>();
 
         ShellConfig shellConfig = ShellConfig.getInstance();
         if (shellConfig.getInsnsXorKey() == 0) {
-            int key = new SecureRandom().nextInt();
+            int key = SECURE_RANDOM.nextInt();
             if (key == 0) {
                 key = 0x6f3a2c1d;
             }
             shellConfig.setInsnsXorKey(key);
         }
-        for(File dexFile : dexFiles) {
+
+        for (File dexFile : dexFiles) {
             ThreadPool.getInstance().execute(() -> {
-                final int dexNo = DexUtils.getDexNumber(dexFile.getName());
-                if(dexNo < 0) {
-                    countDownLatch.countDown();
-                    return;
-                }
-
                 File injectedDexFile = new File(dexFile.getAbsolutePath() + "_inject.dex");
-
+                File extractedDexFile = null;
+                File dexFileRightHashes = null;
                 try {
+                    int dexNo = DexUtils.getDexNumber(dexFile.getName());
+                    if (dexNo < 0) {
+                        throw new IllegalStateException("invalid DEX filename: " + dexFile.getName());
+                    }
+
+                    // Bootstrap/JNI injection is mandatory. Never continue with the original
+                    // DEX when this transformation fails.
                     DexUtils.injectInvokeMethod(dexFile.getAbsolutePath(),
                             injectedDexFile.getAbsolutePath(),
-                            shellConfig.getJniClassNameSig()
-                    );
-
-                    dexFile.delete();
-
-                    injectedDexFile.renameTo(dexFile);
-                }
-                catch (Exception e) {
-                    injectedDexFile.delete();
-                }
-
-                if(isKeepClasses() && DexUtils.dexContainsKeepInPlace(dexFile)) {
-                    // Skip split entirely for dexes containing keep-in-place classes (e.g. Compose):
-                    // the re-partition would break Compose's cross-dex interface linking and cause IncompatibleClassChangeError.
-                    // The dex still goes through extractAllMethods (rule-matched classes are skipped as usual); it is just not split.
-                    LogUtils.info("Skip split for dex with keep-in-place classes (e.g. Compose): %s", dexFile.getName());
-                }
-                else if(isKeepClasses()) {
-                    File keepDex = new File(getKeepDexTempDir(packageDir).getAbsolutePath() + File.separator + dexFile.getName());
-                    File splitDex = new File(dexFile.getAbsolutePath() + "_split.dex");
-
-                    try {
-                        Pair<Integer, Integer> classesCountPair = DexUtils.splitDex(dexFile, keepDex, splitDex);
-
-                        keepClassesCount.set(keepClassesCount.get() + classesCountPair.getKey());
-                        totalClassesCount.set(totalClassesCount.get() + classesCountPair.getValue());
-
-                        dexFile.delete();
-
-                        splitDex.renameTo(dexFile);
-                    } catch (Exception e) {
-                        LogUtils.warn("WARNING: split %s fail", dexFile.getName());
-                        keepDex.delete();
-                        splitDex.delete();
+                            shellConfig.getJniClassNameSig());
+                    if (!injectedDexFile.isFile() || injectedDexFile.length() == 0) {
+                        throw new IllegalStateException("JNI injection produced no DEX");
                     }
-                }
+                    Files.move(injectedDexFile.toPath(), dexFile.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING);
 
-                String extractedDexName = dexFile.getName().endsWith(".dex") ? dexFile.getName().replaceAll("\\.dex$", "_extracted.dat") : "_extracted.dat";
-                File extractedDexFile = new File(dexFile.getParent(), extractedDexName);
+                    if (isKeepClasses() && DexUtils.dexContainsKeepInPlace(dexFile)) {
+                        LogUtils.info("Keep-in-place DEX detected: %s", dexFile.getName());
+                    } else if (isKeepClasses()) {
+                        File keepDex = new File(getKeepDexTempDir(packageDir), dexFile.getName());
+                        File splitDex = new File(dexFile.getAbsolutePath() + "_split.dex");
+                        try {
+                            Pair<Integer, Integer> classesCountPair =
+                                    DexUtils.splitDex(dexFile, keepDex, splitDex);
+                            if (!splitDex.isFile() || splitDex.length() == 0) {
+                                throw new IllegalStateException("DEX split produced no protected output");
+                            }
+                            keepClassesCount.addAndGet(classesCountPair.getKey());
+                            totalClassesCount.addAndGet(classesCountPair.getValue());
+                            Files.move(splitDex.toPath(), dexFile.toPath(),
+                                    StandardCopyOption.REPLACE_EXISTING);
+                        } catch (Exception splitFailure) {
+                            // Keep-class splitting is an optimization. The unsplit DEX still
+                            // proceeds through mandatory method extraction below.
+                            keepDex.delete();
+                            splitDex.delete();
+                            LogUtils.warn("Keep-class split skipped for %s", dexFile.getName());
+                        }
+                    }
 
-                boolean obfuscate = !isSmaller();
-                List<Instruction> ret = DexUtils.extractAllMethods(dexFile, extractedDexFile, getPackageName(), isDumpCode(), obfuscate);
-                instructionMap.put(dexNo, ret);
+                    String extractedDexName = dexFile.getName().endsWith(".dex")
+                            ? dexFile.getName().replaceAll("\\.dex$", "_extracted.dat")
+                            : "_extracted.dat";
+                    extractedDexFile = new File(dexFile.getParent(), extractedDexName);
 
-                File dexFileRightHashes = new File(dexFile.getParent(), FileUtils.getNewFileSuffix(dexFile.getName(),"dat"));
+                    boolean obfuscate = !isSmaller();
+                    List<Instruction> ret = DexUtils.extractAllMethods(
+                            dexFile, extractedDexFile, getPackageName(), isDumpCode(), obfuscate);
+                    if (ret == null || !extractedDexFile.isFile() || extractedDexFile.length() == 0) {
+                        throw new IllegalStateException("method extraction failed for "
+                                + dexFile.getName());
+                    }
+                    instructionMap.put(dexNo, ret);
 
-                try {
+                    dexFileRightHashes = new File(dexFile.getParent(),
+                            FileUtils.getNewFileSuffix(dexFile.getName(), "dat"));
                     DexUtils.writeHashes(extractedDexFile, dexFileRightHashes);
-                    dexFile.delete();
-                    dexFileRightHashes.renameTo(dexFile);
-                }
-                catch (Exception e) {
-                }
-                finally {
-                    if(extractedDexFile.exists()) {
+                    if (!dexFileRightHashes.isFile() || dexFileRightHashes.length() == 0) {
+                        throw new IllegalStateException("hollowed DEX rewrite failed for "
+                                + dexFile.getName());
+                    }
+
+                    // Atomic replacement: only the hollowed/hash-rewritten DEX survives.
+                    Files.move(dexFileRightHashes.toPath(), dexFile.toPath(),
+                            StandardCopyOption.REPLACE_EXISTING);
+
+                    if ("classes.dex".equals(dexFile.getName())) {
+                        String dexSignature = DexUtils.getDexSignature(dexFile);
+                        if (dexSignature == null || dexSignature.isEmpty()) {
+                            throw new IllegalStateException("hollowed primary DEX signature missing");
+                        }
+                        ShellConfig.getInstance().setDexSign(dexSignature);
+                    }
+                } catch (Throwable t) {
+                    extractionFailure.compareAndSet(null, t);
+                } finally {
+                    if (injectedDexFile.exists()) injectedDexFile.delete();
+                    if (extractedDexFile != null && extractedDexFile.exists()) {
                         extractedDexFile.delete();
                     }
+                    if (dexFileRightHashes != null && dexFileRightHashes.exists()) {
+                        dexFileRightHashes.delete();
+                    }
+                    countDownLatch.countDown();
                 }
-
-                if("classes.dex".equals(dexFile.getName())) {
-                    String dexSignature = DexUtils.getDexSignature(dexFile);
-                    ShellConfig.getInstance().setDexSign(dexSignature);
-                }
-                countDownLatch.countDown();
             });
-
         }
 
         ThreadPool.getInstance().shutdown();
-
         try {
             countDownLatch.await();
-        }
-        catch (Exception ignored){
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("DEX protection interrupted", e);
         }
 
-        if(isKeepClasses()) {
-            LogUtils.info("Keep classes: %d, total classes: %d", keepClassesCount.get(), totalClassesCount.get());
+        Throwable failure = extractionFailure.get();
+        if (failure != null) {
+            throw new IllegalStateException("DEX extraction/hollowing failed closed", failure);
         }
+        if (instructionMap.size() != dexFiles.size()) {
+            throw new IllegalStateException("not every source DEX produced a protected method vault");
+        }
+
+        if (isKeepClasses()) {
+            LogUtils.info("Keep classes: %d, total classes: %d",
+                    keepClassesCount.get(), totalClassesCount.get());
+        }
+
         MultiDexCode multiDexCode = MultiDexCodeUtils.makeMultiDexCode(instructionMap);
-
-        MultiDexCodeUtils.writeMultiDexCode(dataOutputPath,multiDexCode);
-
+        MultiDexCodeUtils.writeMultiDexCode(dataOutputPath, multiDexCode);
+        File vault = new File(dataOutputPath);
+        if (!vault.isFile() || vault.length() == 0) {
+            throw new IllegalStateException("protected method-body vault was not produced");
+        }
     }
+
     /**
      * Get all dex files
      */
