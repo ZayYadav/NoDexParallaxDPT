@@ -133,10 +133,10 @@ public class Aab extends AndroidPackage {
         command.add(FileUtils.getJarSignerCommand());
         command.add("-keystore");
         command.add(keyStorePath);
-        command.add("-storepass");
-        command.add(storePassword);
-        command.add("-keypass");
-        command.add(KeyPassword);
+        command.add("-storepass:env");
+        command.add("PARALLAX_STOREPASS");
+        command.add("-keypass:env");
+        command.add("PARALLAX_KEYPASS");
         command.add("-signedjar");
         command.add(signedPackagePath);
         command.add(packagePath);
@@ -144,6 +144,8 @@ public class Aab extends AndroidPackage {
 
         try {
             ProcessBuilder processBuilder = new ProcessBuilder(command);
+            processBuilder.environment().put("PARALLAX_STOREPASS", storePassword);
+            processBuilder.environment().put("PARALLAX_KEYPASS", KeyPassword);
             processBuilder.redirectErrorStream(true);
             Process process = processBuilder.start();
             try (InputStream inputStream = process.getInputStream()) {
@@ -151,9 +153,8 @@ public class Aab extends AndroidPackage {
             }
             return process.waitFor() == 0;
         } catch (Exception e) {
-            e.printStackTrace();
+            throw new IllegalStateException("AAB signing failed closed", e);
         }
-        return false;
     }
 
     private static void process(Aab aab) {
