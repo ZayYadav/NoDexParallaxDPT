@@ -24,7 +24,6 @@ import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstructio
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction31i;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction35c;
 import com.android.tools.smali.dexlib2.immutable.reference.ImmutableMethodReference;
-import com.parallax.parallax.Parallax;
 import com.parallax.parallax.util.CryptoUtils;
 import com.parallax.parallax.util.LogUtils;
 
@@ -56,7 +55,7 @@ import java.util.regex.Pattern;
 public final class HighValueVmTransformer {
     private static final byte[] ENVELOPE_MAGIC = {'P', 'V', 'M', '1'};
     private static final byte[] RAW_MAGIC = {'P', 'V', 'R', '1'};
-    private static final String KEY_LABEL = "Parallax/highvalue/vm/encryption/v1/";
+    private static final String KEY_LABEL = "Parallax/highvalue/vm/encryption/v1";
     private static final String AAD_PREFIX = "Parallax/highvalue/vm/payload/v1/";
     private static final int NONCE_SIZE = 12;
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -226,7 +225,7 @@ public final class HighValueVmTransformer {
             throw new IOException("Parallax build key is missing; cannot seal high-value VM payload");
         }
         byte[] raw = serialize(programs);
-        byte[] payloadKey = CryptoUtils.hmacSha256(encKey, KEY_LABEL + buildKey);
+        byte[] payloadKey = CryptoUtils.hmacSha256(encKey, KEY_LABEL);
         byte[] nonce = new byte[NONCE_SIZE];
         RANDOM.nextBytes(nonce);
         byte[] aad = (AAD_PREFIX + raw.length).getBytes(StandardCharsets.US_ASCII);
