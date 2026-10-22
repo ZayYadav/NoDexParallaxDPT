@@ -675,7 +675,13 @@ PARALLAX_ENCRYPT void read_shell_config(JNIEnv *env) {
 void veritySignature(JNIEnv *env) {
     if (!g_shell_config.app_sign_sha256.empty()) {
         jobject application = android_app_ActivityThread::currentApplication(env);
-
+        if (application == nullptr) {
+            // The library is often loaded from the bootstrap Application's static
+            // initializer, before ActivityThread publishes mInitialApplication. The
+            // security poller re-runs the check with a real Context shortly after.
+            DLOGW("signature pinning deferred: no application context at JNI_OnLoad");
+            return;
+        }
         verifyAppSignature(env, application, g_shell_config.app_sign_sha256.c_str());
     }
 }

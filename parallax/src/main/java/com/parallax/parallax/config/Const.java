@@ -45,6 +45,9 @@ public class Const {
     public static final String OPTION_VERIFY_SIGN = "vs";
     public static final String OPTION_VERIFY_SIGN_LONG = "verify-sign";
 
+    public static final String OPTION_ONE_WAY_LONG = "one-way";
+    public static final String ONE_WAY_SEAL_SUFFIX = ".oneway";
+
     public static final String OPTION_DISABLE_FRIDA_DETECT_LONG = "disable-frida-detect";
     public static final String OPTION_DISABLE_CRC_DETECT_LONG = "disable-crc-detect";
     public static final String OPTION_DISABLE_ANTI_DEBUG_LONG = "disable-anti-debug";

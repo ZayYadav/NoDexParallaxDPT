@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <string>
 #include <sys/system_properties.h>
+#include <unistd.h>
 #include "mbedtls/sha256.h"
 #include "mz_crypt.h"
 #include "parallax.h"
@@ -26,6 +27,12 @@ constexpr jint SECURITY_HOOK_FRAMEWORK = 1 << 3;
 constexpr jint SECURITY_PAYLOAD_TAMPER = 1 << 4;
 std::atomic<bool> g_risk_thread_started{false};
 std::atomic<jint> g_reported_security_state{0};
+
+[[noreturn]] void fatalIntegrityFailure(const char *reason) {
+    DLOGE("one-way seal: fatal integrity failure: %s", reason == nullptr ? "unknown" : reason);
+    (void) kill(getpid(), SIGKILL);
+    _exit(173);
+}
 }
 
 void reportSecurityRisk(jint riskBits) {
@@ -407,7 +414,12 @@ PARALLAX_ENCRYPT jint securityStatus(JNIEnv *env, jclass, jobject context) {
         result |= SECURITY_HOOK_FRAMEWORK;
     }
     if (!verifyProtectedDexPayload(env)) {
-        result |= SECURITY_PAYLOAD_TAMPER;
+        // A protected payload that no longer authenticates is either corrupted or was
+        // rebuilt outside the one-way seal. There is no safe degraded mode.
+        fatalIntegrityFailure("protected DEX payload authentication failed");
+    }
+    if (context != nullptr && !g_shell_config.app_sign_sha256.empty()) {
+        verifyAppSignature(env, context, g_shell_config.app_sign_sha256.c_str());
     }
     reportSecurityRisk(result & (SECURITY_TRACER | SECURITY_HOOK_FRAMEWORK | SECURITY_PAYLOAD_TAMPER));
     DLOGI("Parallax Protection policy status: 0x%x", result);
@@ -571,15 +583,17 @@ PARALLAX_ENCRYPT void detectRisk() {
 
 PARALLAX_ENCRYPT void verifyAppSignature(JNIEnv *env, jobject context, const char *expectedSha256) {
     static std::string actual = {};
-    if (context == nullptr || expectedSha256 == nullptr || strlen(expectedSha256) == 0) {
+    if (expectedSha256 == nullptr || strlen(expectedSha256) == 0) {
         DLOGW("signature check not configured, skip");
         return;
     }
+    if (context == nullptr) {
+        fatalIntegrityFailure("signature pinning is configured but the application context is null");
+    }
 
-    if(!actual.empty()) {
+    if (!actual.empty()) {
         if (parallax_strncasecmp(actual.c_str(), expectedSha256, 64) != 0) {
-            DLOGW("signature cache verification failed, expected: %s actual: %s", expectedSha256, actual.c_str());
-            parallax_crash();
+            fatalIntegrityFailure("cached signing certificate does not match the one-way seal");
         }
         return;
     }
@@ -588,18 +602,14 @@ PARALLAX_ENCRYPT void verifyAppSignature(JNIEnv *env, jobject context, const cha
             AY_OBFUSCATE("getPackageManager"),
             AY_OBFUSCATE("()Landroid/content/pm/PackageManager;"));
     if (pm == nullptr) {
-        DLOGW("getPackageManager failed");
-        parallax_crash();
-        return;
+        fatalIntegrityFailure("getPackageManager failed while verifying the one-way seal");
     }
 
     jstring packageName = (jstring) parallax::jni::CallObjectMethod(env, context,
             AY_OBFUSCATE("getPackageName"),
             AY_OBFUSCATE("()Ljava/lang/String;"));
     if (packageName == nullptr) {
-        DLOGW("getPackageName failed");
-        parallax_crash();
-        return;
+        fatalIntegrityFailure("getPackageName failed while verifying the one-way seal");
     }
 
     int api = android_get_device_api_level();
@@ -610,9 +620,7 @@ PARALLAX_ENCRYPT void verifyAppSignature(JNIEnv *env, jobject context, const cha
             AY_OBFUSCATE("(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;"),
             packageName, flags);
     if (packageInfo == nullptr) {
-        DLOGW("getPackageInfo failed");
-        parallax_crash();
-        return;
+        fatalIntegrityFailure("getPackageInfo failed while verifying the one-way seal");
     }
 
     jbyteArray certBytes = nullptr;
@@ -621,17 +629,13 @@ PARALLAX_ENCRYPT void verifyAppSignature(JNIEnv *env, jobject context, const cha
                 AY_OBFUSCATE("signingInfo"),
                 AY_OBFUSCATE("Landroid/content/pm/SigningInfo;"));
         if (signingInfo == nullptr) {
-            DLOGW("signingInfo is null");
-            parallax_crash();
-            return;
+            fatalIntegrityFailure("signingInfo is null while verifying the one-way seal");
         }
         jobjectArray signaturesArr = (jobjectArray) parallax::jni::CallObjectMethod(env, signingInfo,
                 AY_OBFUSCATE("getApkContentsSigners"),
                 AY_OBFUSCATE("()[Landroid/content/pm/Signature;"));
         if (signaturesArr == nullptr || env->GetArrayLength(signaturesArr) == 0) {
-            DLOGW("getApkContentsSigners returned empty");
-            parallax_crash();
-            return;
+            fatalIntegrityFailure("getApkContentsSigners returned empty");
         }
         jobject signature = env->GetObjectArrayElement(signaturesArr, 0);
         certBytes = (jbyteArray) parallax::jni::CallObjectMethod(env, signature,
@@ -641,9 +645,7 @@ PARALLAX_ENCRYPT void verifyAppSignature(JNIEnv *env, jobject context, const cha
                 AY_OBFUSCATE("signatures"),
                 AY_OBFUSCATE("[Landroid/content/pm/Signature;"));
         if (signaturesArr == nullptr || env->GetArrayLength(signaturesArr) == 0) {
-            DLOGW("signatures field is empty");
-            parallax_crash();
-            return;
+            fatalIntegrityFailure("signatures field is empty");
         }
         jobject signature = env->GetObjectArrayElement(signaturesArr, 0);
         certBytes = (jbyteArray) parallax::jni::CallObjectMethod(env, signature,
@@ -651,9 +653,7 @@ PARALLAX_ENCRYPT void verifyAppSignature(JNIEnv *env, jobject context, const cha
     }
 
     if (certBytes == nullptr) {
-        DLOGW("certBytes is null");
-        parallax_crash();
-        return;
+        fatalIntegrityFailure("certBytes is null while verifying the one-way seal");
     }
 
     jsize certLen = env->GetArrayLength(certBytes);
@@ -673,7 +673,6 @@ PARALLAX_ENCRYPT void verifyAppSignature(JNIEnv *env, jobject context, const cha
     actual.assign(sha256Hex);
 
     if (parallax_strncasecmp(sha256Hex, expectedSha256, 64) != 0) {
-        DLOGW("signature verification failed, expected: %s actual: %s", expectedSha256, sha256Hex);
-        parallax_crash();
+        fatalIntegrityFailure("signing certificate does not match the one-way seal");
     }
 }

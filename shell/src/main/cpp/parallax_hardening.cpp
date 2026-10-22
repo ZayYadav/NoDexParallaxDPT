@@ -80,6 +80,47 @@ void lockProcessDumping() {
     (void) setrlimit(RLIMIT_CORE, &coreLimit);
 }
 
+bool hasInjectedExecutableMapping() {
+    FILE *fp = fopen("/proc/self/maps", "r");
+    if (fp == nullptr) {
+        return false;
+    }
+
+    static const char *suspiciousPaths[] = {
+            "/data/local/tmp/",
+            "frida",
+            "gadget",
+            "gum-js",
+            "substrate",
+            "xposed",
+            "magisk"
+    };
+
+    char line[1024] = {0};
+    bool found = false;
+    while (fgets(line, sizeof(line), fp) != nullptr) {
+        char perms[5] = {0};
+        unsigned long long start = 0;
+        unsigned long long end = 0;
+        if (sscanf(line, "%llx-%llx %4s", &start, &end, perms) != 3 || perms[2] != 'x') {
+            continue;
+        }
+        (void) start;
+        (void) end;
+        for (const char *marker : suspiciousPaths) {
+            if (strstr(line, marker) != nullptr) {
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            break;
+        }
+    }
+    fclose(fp);
+    return found;
+}
+
 bool isDexBackedAnonymousName(const char *name) {
     if (name == nullptr || name[0] == '\0') {
         return false;
@@ -211,6 +252,7 @@ void *parallaxHardeningWatchdog(void *) {
         if (processDumpingUnlocked()
             || hasTracerPid()
             || hasRuntimeInstrumentationMarker()
+            || hasInjectedExecutableMapping()
             || hasSelfMemDescriptor()) {
             terminateProtectedProcess();
         }

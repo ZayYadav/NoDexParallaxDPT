@@ -233,6 +233,50 @@ jobs:
           echo "- Output: P-Parallax-Protected.apk" >> "$GITHUB_STEP_SUMMARY"
           echo "- Size: $(stat -c '%s' "$FINAL_DIR/P-Parallax-Protected.apk") bytes" >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Verify one-way seal
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT_DIR="$RUNNER_TEMP/parallax-one-way"
+          mkdir -p "$OUT_DIR"
+
+          pushd executable >/dev/null
+          java -jar parallax.jar -f "$RUNNER_TEMP/P.apk" --one-way -o "$OUT_DIR"
+          popd >/dev/null
+
+          SEALED=$(find "$OUT_DIR" -type f -name '*.apk' -size +0c | sort | head -n1)
+          test -n "$SEALED"
+          test -s "$SEALED.oneway"
+          unzip -t "$SEALED" >/dev/null
+
+          if unzip -Z1 "$SEALED" | grep -Eq '^classes[2-9][0-9]*\.dex$'; then
+            echo "One-way output still contains keep-classes dex files" >&2
+            unzip -Z1 "$SEALED" >&2
+            exit 1
+          fi
+          unzip -Z1 "$SEALED" | grep -qx 'assets/ItsParallaxBaby' || {
+            echo "One-way output is missing the shell config marker" >&2
+            exit 1
+          }
+          unzip -Z1 "$SEALED" | grep -qx 'assets/Parallax.love' || {
+            echo "One-way output is missing the encrypted method vault" >&2
+            exit 1
+          }
+
+          if java -jar executable/parallax.jar -f "$SEALED" --one-way -o "$RUNNER_TEMP/one-way-reprotect"; then
+            echo "One-way seal accepted an already-protected APK" >&2
+            exit 1
+          fi
+
+          if java -jar executable/parallax.jar -f "$RUNNER_TEMP/P.apk" --one-way -K -o "$RUNNER_TEMP/one-way-keep"; then
+            echo "One-way seal accepted -K/--keep-classes" >&2
+            exit 1
+          fi
+
+          echo "### One-way seal" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Sealed APK: $(basename "$SEALED")" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Sidecar: $(basename "$SEALED").oneway" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify protected startup bootstrap wiring
         shell: bash
         run: |

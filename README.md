@@ -66,7 +66,48 @@ usage: java -jar parallax.jar [option] -f <package_file>
                              The certificate SHA-256 is computed
                              automatically from the signing keystore.
  -x,--no-sign                Do not sign package.
+    --one-way                One-way seal: refuse already-protected inputs, forbid
+                             -K/--keep-classes, force signature pinning and every
+                             runtime check, audit the output for original DEX bytes,
+                             and securely erase protection workspaces. APK only.
 ```
+
+## One-way seal
+
+`--one-way` is the anti-recovery mode. Once an APK is sealed, the build tool:
+
+- refuses an input that is already Parallax-protected (double protection corrupts the
+  bootstrap and cannot restore the original);
+- rejects `-K/--keep-classes`, `-r/--do-not-protect-classes`, `--dump-code`,
+  `--debuggable`, and `--disable-app-component-factory`, because each one leaves
+  recoverable code behind or weakens the bootstrap;
+- forces runtime signature pinning, Frida/CRC/anti-debug checks, and native payload
+  authentication to **fail closed** (the process is killed on mismatch);
+- audits the finished APK and aborts if any original `classes*.dex` header or digest is
+  still present in any entry;
+- overwrites and erases the workspace and every intermediate artifact;
+- writes `<output>.oneway` with the input/output SHA-256 identities for auditing.
+
+```shell
+java -jar parallax.jar -f app.apk --one-way -o out
+```
+
+The built-in signing key is public, so use a private keystore for deployments:
+
+```shell
+java -jar parallax.jar -f app.apk --one-way -c protect-config.json -o out
+```
+
+The input APK is never modified or deleted. Re-sign the sealed output only with the
+same key that produced the pinned certificate, otherwise the runtime check will kill it.
+
+Known limit: packages matched by the default compatibility exclusion rules (typically
+bundled AndroidX/Google libraries) stay in the hollowed dex. The seal covers the app's
+own classes; it does not claim byte-for-byte erasure of third-party library code.
+
+No client-side packer is unbreakable. The one-way seal blocks the normal
+unzip/dump/repack/re-sign recovery workflows and makes tampering fail closed; it does
+not defeat a determined reverse engineer with kernel-level instrumentation.
 
 ## Notice
 

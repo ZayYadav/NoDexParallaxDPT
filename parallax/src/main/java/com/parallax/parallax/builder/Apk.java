@@ -438,10 +438,7 @@ public class Apk extends AndroidPackage {
             try {
                 processZeroDexApk(apk, apkFile, apkMainProcessPath);
             } finally {
-                File workspace = new File(apkMainProcessPath);
-                if (workspace.exists()) {
-                    FileUtils.deleteRecurse(workspace);
-                }
+                apk.cleanupWorkspace(new File(apkMainProcessPath));
             }
             LogUtils.info("All done (zero-DEX mode).");
             return;
@@ -482,10 +479,7 @@ public class Apk extends AndroidPackage {
         } catch (Exception e) {
             throw new IllegalStateException("APK protection failed", e);
         } finally {
-            File apkMainProcessFile = new File(apkMainProcessPath);
-            if (apkMainProcessFile.exists()) {
-                FileUtils.deleteRecurse(apkMainProcessFile);
-            }
+            apk.cleanupWorkspace(new File(apkMainProcessPath));
         }
     }
 
@@ -493,5 +487,8 @@ public class Apk extends AndroidPackage {
     public void protect() throws IOException {
         super.protect();
         process(this);
+        if (oneWaySession != null) {
+            oneWaySession.finish(getLastBuiltPackagePath());
+        }
     }
 }

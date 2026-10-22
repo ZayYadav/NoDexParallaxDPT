@@ -9,6 +9,7 @@ import com.parallax.parallax.config.ProtectRules;
 import com.parallax.parallax.config.ShellConfig;
 import com.parallax.parallax.dex.JunkCodeGenerator;
 import com.parallax.parallax.elf.ReadElf;
+import com.parallax.parallax.hardening.OneWaySeal;
 import com.parallax.parallax.model.Instruction;
 import com.parallax.parallax.model.MultiDexCode;
 import com.parallax.parallax.task.ThreadPool;
@@ -69,6 +70,7 @@ public abstract class AndroidPackage {
         public boolean smaller = false;
         public String protectConfigFile = null;
         public boolean verifySign = false;
+        public boolean oneWaySeal = false;
         public int riskCheckFlags = 0;
 
         public Builder filePath(String path) {
@@ -103,6 +105,11 @@ public abstract class AndroidPackage {
 
         public Builder verifySign(boolean verifySign) {
             this.verifySign = verifySign;
+            return this;
+        }
+
+        public Builder oneWaySeal(boolean oneWaySeal) {
+            this.oneWaySeal = oneWaySeal;
             return this;
         }
 
@@ -157,7 +164,10 @@ public abstract class AndroidPackage {
     private boolean keepClasses = false;
     private String protectConfigFile;
     private boolean verifySign = false;
+    private boolean oneWaySeal = false;
     private int riskCheckFlags = 0;
+    private volatile String lastBuiltPackagePath = null;
+    protected OneWaySeal.Session oneWaySession = null;
 
     public AndroidPackage(Builder builder) {
         setFilePath(builder.filePath);
@@ -173,7 +183,20 @@ public abstract class AndroidPackage {
         setSmaller(builder.smaller);
         setProtectConfigFile(builder.protectConfigFile);
         setVerifySign(builder.verifySign);
+        setOneWaySeal(builder.oneWaySeal);
         setRiskCheckFlags(builder.riskCheckFlags);
+    }
+
+    public void setOneWaySeal(boolean oneWaySeal) {
+        this.oneWaySeal = oneWaySeal;
+    }
+
+    public boolean isOneWaySeal() {
+        return oneWaySeal;
+    }
+
+    public String getLastBuiltPackagePath() {
+        return lastBuiltPackagePath;
     }
 
     public void setProtectConfigFile(String protectConfigFile) {
@@ -883,10 +906,15 @@ public abstract class AndroidPackage {
 
         LogUtils.info("unsign package file: %s, exists: %s", willSignPackageFile.getAbsolutePath(), willSignPackageFile.exists());
 
+        if (isOneWaySeal() && isSign() && !signResult) {
+            throw new IllegalStateException("One-way seal requires a signed output, but signing failed.");
+        }
+
         String resultPath = signedPackageFile.exists() ? signedPackageFile.getAbsolutePath() : willSignPackageFile.getAbsolutePath();
+        lastBuiltPackagePath = resultPath;
 
         if (signResult && willSignPackageFile.exists()) {
-            willSignPackageFile.delete();
+            deleteIntermediate(willSignPackageFile);
         }
 
         if(signResult) {
@@ -895,20 +923,45 @@ public abstract class AndroidPackage {
 
         if(zipalignSuccess) {
             try {
-                Files.deleteIfExists(Paths.get(unzipalignPackagePath));
+                File unzipalignFile = new File(unzipalignPackagePath);
+                if (unzipalignFile.exists()) {
+                    deleteIntermediate(unzipalignFile);
+                }
             }catch (Exception e){
                 LogUtils.debug("unzipalign package path err = %s", e);
             }
         }
 
         if (idsigFile.exists()) {
-            idsigFile.delete();
+            deleteIntermediate(idsigFile);
         }
 
         if (keyStoreFile.exists()) {
-            keyStoreFile.delete();
+            deleteIntermediate(keyStoreFile);
         }
         LogUtils.info("protected package output path: " + resultPath + "\n");
+    }
+
+    protected void cleanupWorkspace(File dir) {
+        if (dir == null || !dir.exists()) {
+            return;
+        }
+        if (isOneWaySeal()) {
+            OneWaySeal.secureDelete(dir);
+        } else {
+            FileUtils.deleteRecurse(dir);
+        }
+    }
+
+    private void deleteIntermediate(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        if (isOneWaySeal()) {
+            OneWaySeal.secureDelete(file);
+        } else {
+            file.delete();
+        }
     }
 
     private boolean signPackageDebug(String packagePath, String keyStorePath, String signedPackagePath) {
@@ -1061,6 +1114,15 @@ public abstract class AndroidPackage {
                 try (FileInputStream fis = new FileInputStream(keystorePath)) {
                     ks = loadKeyStore(fis, pwdChars);
                 }
+            } else {
+                try (InputStream defaultStore = AndroidPackage.class.getClassLoader()
+                        .getResourceAsStream(Const.KEY_STORE_ASSET_PATH)) {
+                    if (defaultStore == null) {
+                        LogUtils.error("Default signing keystore resource is missing: " + Const.KEY_STORE_ASSET_PATH);
+                        return null;
+                    }
+                    ks = loadKeyStore(defaultStore, pwdChars);
+                }
             }
 
             if (ks == null) {
@@ -1105,6 +1167,24 @@ public abstract class AndroidPackage {
             throw new FileNotFoundException(msg);
         }
 
+        if (isOneWaySeal()) {
+            if (isKeepClasses()) {
+                throw new IllegalStateException("One-way seal cannot keep classes; their method bodies stay recoverable.");
+            }
+            if (getRulesFilePath() != null && !getRulesFilePath().isEmpty()) {
+                throw new IllegalStateException("One-way seal cannot use exclusion rules; excluded classes keep original bytecode.");
+            }
+            if (isDumpCode()) {
+                throw new IllegalStateException("One-way seal cannot dump code items to plaintext JSON.");
+            }
+            if (isDebuggable()) {
+                throw new IllegalStateException("One-way seal cannot build a debuggable APK.");
+            }
+            if (!isAppComponentFactory()) {
+                throw new IllegalStateException("One-way seal requires the bootstrap component factory.");
+            }
+        }
+
         processRuleFile();
         processProtectConfigFile();
 
@@ -1112,14 +1192,27 @@ public abstract class AndroidPackage {
         // Merge CLI flags into config-file flags (each bit = one switch)
         shellConfig.setRiskCheckFlags(shellConfig.getRiskCheckFlags() | getRiskCheckFlags());
 
+        if (isOneWaySeal()) {
+            if (shellConfig.getRiskCheckFlags() != 0) {
+                LogUtils.warn("One-way seal overrides protect-config risk_check_flags; all runtime checks stay enabled.");
+            }
+            shellConfig.setRiskCheckFlags(0);
+        }
+
         if (isVerifySign()) {
             String sha256 = computeSignatureSha256();
             if (sha256 != null) {
                 shellConfig.setAppSignSha256(sha256);
                 LogUtils.info("Signature verification enabled, SHA-256: " + sha256);
+            } else if (isOneWaySeal()) {
+                throw new IllegalStateException("One-way seal requires signature pinning, but the signing certificate could not be read.");
             } else {
                 LogUtils.error("Failed to compute certificate SHA-256, signature verification disabled.");
             }
+        }
+
+        if (isOneWaySeal()) {
+            oneWaySession = OneWaySeal.begin(this);
         }
 
         JunkCodeGenerator.generateJunkCodeDex(new File(getJunkCodeDexPath()));

@@ -41,6 +41,8 @@ public class Parallax {
             androidPackage.protect();
         } catch (Exception e){
             e.printStackTrace();
+            // A failed protection run must not look like a successful build to CI or scripts.
+            System.exit(1);
         }
     }
 
@@ -48,6 +50,7 @@ public class Parallax {
         System.err.println("Error: " + msg);
         HelpFormatter helpFormatter = new HelpFormatter();
         helpFormatter.printHelp("java -jar parallax.jar [option] -f <package_file>",options);
+        System.exit(1);
     }
 
     private static void printVersion() {
@@ -126,6 +129,10 @@ public class Parallax {
                 + "- x86\n"
                 + "- x86_64"));
         options.addOption(new Option(Const.OPTION_VERIFY_SIGN, Const.OPTION_VERIFY_SIGN_LONG, false, "Enable runtime app signature verification. The certificate SHA-256 is computed automatically from the signing keystore.\n"));
+        options.addOption(new Option(null, Const.OPTION_ONE_WAY_LONG, false,
+                "One-way seal: refuse already-protected inputs, forbid -K/--keep-classes, force signature "
+                        + "pinning and every runtime check, audit the output for original DEX bytes, and "
+                        + "securely erase protection workspaces. APK only.\n"));
         options.addOption(new Option(null, Const.OPTION_DISABLE_FRIDA_DETECT_LONG, false, "Disable runtime Frida detection.\n"));
         options.addOption(new Option(null, Const.OPTION_DISABLE_CRC_DETECT_LONG, false, "Disable runtime libc .text CRC detection.\n"));
         options.addOption(new Option(null, Const.OPTION_DISABLE_ANTI_DEBUG_LONG, false, "Disable runtime anti-debug.\n"));
@@ -171,6 +178,36 @@ public class Parallax {
                 riskCheckFlags |= Const.FLAG_DISABLE_ANTI_DEBUG;
             }
 
+            boolean oneWaySeal = commandLine.hasOption(Const.OPTION_ONE_WAY_LONG);
+            if (oneWaySeal && commandLine.hasOption(Const.OPTION_KEEP_CLASSES)) {
+                usage(options, "--one-way cannot be combined with -K/--keep-classes; kept method bodies remain recoverable from the APK.");
+                return null;
+            }
+            if (oneWaySeal && commandLine.hasOption(Const.OPTION_DO_NOT_PROTECT_CLASSES_RULES)) {
+                usage(options, "--one-way cannot be combined with -r/--do-not-protect-classes; excluded classes keep their original bytecode in the APK.");
+                return null;
+            }
+            if (oneWaySeal && riskCheckFlags != 0) {
+                usage(options, "--one-way keeps every runtime check enabled; remove --disable-frida-detect/--disable-crc-detect/--disable-anti-debug.");
+                return null;
+            }
+            if (oneWaySeal && commandLine.hasOption(Const.OPTION_DEBUGGABLE_LONG)) {
+                usage(options, "--one-way cannot build a debuggable APK; the runtime check would flag it on every launch.");
+                return null;
+            }
+            if (oneWaySeal && commandLine.hasOption(Const.OPTION_DISABLE_APP_COMPONENT_FACTORY_LONG)) {
+                usage(options, "--one-way requires the bootstrap component factory; remove --disable-app-component-factory.");
+                return null;
+            }
+            if (oneWaySeal && commandLine.hasOption(Const.OPTION_DUMP_CODE_LONG)) {
+                usage(options, "--one-way cannot be combined with --dump-code; it writes original bytecode to plaintext JSON files.");
+                return null;
+            }
+            if (oneWaySeal && commandLine.hasOption(Const.OPTION_NO_SIGN_PACKAGE)) {
+                usage(options, "--one-way requires a signed APK because the runtime pins the signing certificate; remove -x/--no-sign.");
+                return null;
+            }
+
             if(filePath.endsWith(".apk")) {
                 return new Apk.Builder()
                         .filePath(filePath)
@@ -184,13 +221,18 @@ public class Parallax {
                         .keepClasses(commandLine.hasOption(Const.OPTION_KEEP_CLASSES))
                         .smaller(commandLine.hasOption(Const.OPTION_SMALLER))
                         .protectConfigFile(commandLine.getOptionValue(Const.OPTION_PROTECT_CONFIG))
-                        .verifySign(commandLine.hasOption(Const.OPTION_VERIFY_SIGN))
+                        .verifySign(commandLine.hasOption(Const.OPTION_VERIFY_SIGN) || oneWaySeal)
+                        .oneWaySeal(oneWaySeal)
                         .riskCheckFlags(riskCheckFlags)
                         .build();
             }
             else if(filePath.endsWith(".aab")) {
                 if (HighValueVmCoordinator.isEnabled()) {
                     usage(options, "--high-value-methods is currently APK-only; AAB protection is unchanged.");
+                    return null;
+                }
+                if (oneWaySeal) {
+                    usage(options, "--one-way is currently APK-only.");
                     return null;
                 }
                 return new Aab.Builder()
