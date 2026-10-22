@@ -81,6 +81,8 @@ usage: java -jar parallax.jar [option] -f <package_file>
 - rejects `-K/--keep-classes`, `-r/--do-not-protect-classes`, `--dump-code`,
   `--debuggable`, and `--disable-app-component-factory`, because each one leaves
   recoverable code behind or weakens the bootstrap;
+- routes every method the native VM can compile (up to 2000) instead of the top-96
+  heuristic, and logs routed/eligible/deferred/unsupported coverage for the build;
 - forces runtime signature pinning, Frida/CRC/anti-debug checks, and native payload
   authentication to **fail closed** (the process is killed on mismatch);
 - audits the finished APK and aborts if any original `classes*.dex` header or digest is

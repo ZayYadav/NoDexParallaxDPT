@@ -20,12 +20,19 @@ public final class HighValueVmCoordinator {
     private static final String CLASSIC_VM_ASSET = "Parallax.vmc";
 
     private static volatile String rulesPath;
+    private static volatile boolean fullCoverage;
     private static boolean prepared;
 
     private HighValueVmCoordinator() {}
 
     public static synchronized void setRulesPath(String value) {
         rulesPath = value == null || value.trim().isEmpty() ? null : value.trim();
+        prepared = false;
+    }
+
+    /** One-way builds route every VM-eligible method, not just the top 96. */
+    public static synchronized void setFullCoverage(boolean value) {
+        fullCoverage = value;
         prepared = false;
     }
 
@@ -112,7 +119,7 @@ public final class HighValueVmCoordinator {
 
     private static int prepareAutomaticMixed(File workspace, List<File> dexFiles, byte[] encKey)
             throws IOException {
-        AutomaticVmSelector.Selection selection = AutomaticVmSelector.select(dexFiles);
+        AutomaticVmSelector.Selection selection = AutomaticVmSelector.select(dexFiles, fullCoverage);
         if (selection.getSelectedCount() == 0) {
             prepared = true;
             LogUtils.info("Automatic VM routing: no safe eligible methods; normal DPT path retained.");
@@ -191,10 +198,20 @@ public final class HighValueVmCoordinator {
         else HighValueVmFourLayerCodec.writeEncryptedPayload(vm4Payload, vm4Programs, encKey);
 
         prepared = true;
+        int unsupported = Math.max(0, selection.getTotalCount() - selection.getEligibleCount());
+        int routed = selection.getSelectedCount();
+        int totalMethods = selection.getTotalCount();
+        int deferred = Math.max(0, selection.getEligibleCount() - routed);
+        double coverage = totalMethods == 0 ? 0.0 : (routed * 100.0) / totalMethods;
         LogUtils.info(
-                "Automatic VM routing complete: VM=%d VM4=%d selected=%d eligible=%d; unsupported methods remain on normal DPT.",
-                vmPrograms.size(), vm4Programs.size(), selection.getSelectedCount(),
-                selection.getEligibleCount());
+                "Automatic VM routing complete: VM=%d VM4=%d routed=%d eligible=%d deferred=%d total=%d unsupported=%d coverage=%.1f%%",
+                vmPrograms.size(), vm4Programs.size(), routed,
+                selection.getEligibleCount(), deferred, totalMethods, unsupported, coverage);
+        if (fullCoverage) {
+            LogUtils.info("Full-coverage request: routed=%d eligible=%d deferred=%d unsupported=%d; "
+                    + "deferred/unsupported methods stay on DPT until later VM stages land.",
+                    routed, selection.getEligibleCount(), deferred, unsupported);
+        }
         return total;
     }
 

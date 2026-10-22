@@ -33,6 +33,10 @@ final class AutomaticVmSelector {
     static final int MAX_VM4_METHODS = 32;
     static final int MIN_INSTRUCTIONS = 6;
     static final int MAX_INSTRUCTIONS = 128;
+    // Full-coverage mode stays below the native parser's 4096-program ceiling and keeps
+    // the sealed payload comfortably inside the 8 MiB classic-VM envelope.
+    static final int MAX_FULL_METHODS = 2000;
+    static final int MAX_FULL_INSTRUCTIONS = 256;
 
     enum Tier { VM, VM4 }
 
@@ -40,18 +44,22 @@ final class AutomaticVmSelector {
         private final List<HighValueVmTransformer.Rule> vmRules;
         private final List<HighValueVmTransformer.Rule> vm4Rules;
         private final int eligibleCount;
+        private final int totalCount;
 
         Selection(List<HighValueVmTransformer.Rule> vmRules,
                   List<HighValueVmTransformer.Rule> vm4Rules,
-                  int eligibleCount) {
+                  int eligibleCount,
+                  int totalCount) {
             this.vmRules = vmRules;
             this.vm4Rules = vm4Rules;
             this.eligibleCount = eligibleCount;
+            this.totalCount = totalCount;
         }
 
         List<HighValueVmTransformer.Rule> getVmRules() { return vmRules; }
         List<HighValueVmTransformer.Rule> getVm4Rules() { return vm4Rules; }
         int getEligibleCount() { return eligibleCount; }
+        int getTotalCount() { return totalCount; }
         int getSelectedCount() { return vmRules.size() + vm4Rules.size(); }
     }
 
@@ -77,15 +85,21 @@ final class AutomaticVmSelector {
     private AutomaticVmSelector() {}
 
     static Selection select(List<File> dexFiles) throws IOException {
+        return select(dexFiles, false);
+    }
+
+    static Selection select(List<File> dexFiles, boolean fullCoverage) throws IOException {
         List<Candidate> candidates = new ArrayList<>();
         Set<String> seen = new HashSet<>();
+        int totalMethods = 0;
 
         for (File dex : dexFiles) {
             DexBackedDexFile file = DexFileFactory.loadDexFile(dex, Opcodes.getDefault());
             for (ClassDef classDef : file.getClasses()) {
                 if (isFrameworkClass(classDef.getType())) continue;
                 for (Method method : classDef.getMethods()) {
-                    Candidate candidate = inspect(method);
+                    totalMethods++;
+                    Candidate candidate = inspect(method, fullCoverage);
                     if (candidate != null && seen.add(candidate.signature)) {
                         candidates.add(candidate);
                     }
@@ -99,19 +113,21 @@ final class AutomaticVmSelector {
 
         List<HighValueVmTransformer.Rule> vm = new ArrayList<>();
         List<HighValueVmTransformer.Rule> vm4 = new ArrayList<>();
-        int selected = Math.min(candidates.size(), MAX_TOTAL_METHODS);
+        int maxTotal = fullCoverage ? MAX_FULL_METHODS : MAX_TOTAL_METHODS;
+        int maxVm4 = fullCoverage ? MAX_FULL_METHODS : MAX_VM4_METHODS;
+        int selected = Math.min(candidates.size(), maxTotal);
         for (int i = 0; i < selected; i++) {
             Candidate candidate = candidates.get(i);
             Tier tier = classify(candidate.instructionCount, candidate.branchCount,
                     candidate.arithmeticCount, candidate.sensitiveName);
-            if (tier == Tier.VM4 && vm4.size() < MAX_VM4_METHODS) {
+            if (tier == Tier.VM4 && vm4.size() < maxVm4) {
                 vm4.add(new HighValueVmTransformer.Rule(candidate.signature));
             } else {
                 vm.add(new HighValueVmTransformer.Rule(candidate.signature));
             }
         }
         return new Selection(Collections.unmodifiableList(vm),
-                Collections.unmodifiableList(vm4), candidates.size());
+                Collections.unmodifiableList(vm4), candidates.size(), totalMethods);
     }
 
     static Tier classify(int instructionCount, int branchCount,
@@ -124,7 +140,7 @@ final class AutomaticVmSelector {
         return Tier.VM;
     }
 
-    private static Candidate inspect(Method method) {
+    private static Candidate inspect(Method method, boolean fullCoverage) {
         int flags = method.getAccessFlags();
         if ((flags & AccessFlags.STATIC.getValue()) == 0) return null;
         if ((flags & (AccessFlags.NATIVE.getValue() | AccessFlags.ABSTRACT.getValue())) != 0) return null;
@@ -143,13 +159,14 @@ final class AutomaticVmSelector {
         int instructionCount = 0;
         int branchCount = 0;
         int arithmeticCount = 0;
+        int maxInstructions = fullCoverage ? MAX_FULL_INSTRUCTIONS : MAX_INSTRUCTIONS;
         for (Instruction instruction : impl.getInstructions()) {
             Opcode opcode = instruction.getOpcode();
             if (!isSupported(opcode)) return null;
             instructionCount++;
             if (isBranch(opcode)) branchCount++;
             if (isArithmetic(opcode)) arithmeticCount++;
-            if (instructionCount > MAX_INSTRUCTIONS) return null;
+            if (instructionCount > maxInstructions) return null;
         }
         if (instructionCount < MIN_INSTRUCTIONS) return null;
 

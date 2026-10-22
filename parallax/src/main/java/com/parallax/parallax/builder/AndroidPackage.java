@@ -7,6 +7,7 @@ import com.parallax.parallax.Parallax;
 import com.parallax.parallax.config.Const;
 import com.parallax.parallax.config.ProtectRules;
 import com.parallax.parallax.config.ShellConfig;
+import com.parallax.parallax.dex.HighValueVmCoordinator;
 import com.parallax.parallax.dex.JunkCodeGenerator;
 import com.parallax.parallax.elf.ReadElf;
 import com.parallax.parallax.hardening.OneWaySeal;
@@ -1184,6 +1185,9 @@ public abstract class AndroidPackage {
                 throw new IllegalStateException("One-way seal requires the bootstrap component factory.");
             }
         }
+
+        // One-way builds move every VM-eligible method instead of the top-N heuristic.
+        HighValueVmCoordinator.setFullCoverage(isOneWaySeal());
 
         processRuleFile();
         processProtectConfigFile();

@@ -29,4 +29,11 @@ public class AutomaticVmSelectorTest {
         assertTrue(AutomaticVmSelector.MAX_VM4_METHODS < AutomaticVmSelector.MAX_TOTAL_METHODS);
         assertTrue(AutomaticVmSelector.MAX_INSTRUCTIONS >= AutomaticVmSelector.MIN_INSTRUCTIONS);
     }
+
+    @Test
+    public void fullCoverageStaysInsideNativeParserLimits() {
+        assertTrue(AutomaticVmSelector.MAX_FULL_METHODS > AutomaticVmSelector.MAX_TOTAL_METHODS);
+        assertTrue(AutomaticVmSelector.MAX_FULL_METHODS < 4096);
+        assertTrue(AutomaticVmSelector.MAX_FULL_INSTRUCTIONS >= AutomaticVmSelector.MAX_INSTRUCTIONS);
+    }
 }
