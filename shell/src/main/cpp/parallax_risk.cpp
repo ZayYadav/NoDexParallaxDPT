@@ -26,6 +26,7 @@ constexpr jint SECURITY_TRACER = 1 << 2;
 constexpr jint SECURITY_HOOK_FRAMEWORK = 1 << 3;
 constexpr jint SECURITY_PAYLOAD_TAMPER = 1 << 4;
 std::atomic<bool> g_risk_thread_started{false};
+std::string g_actual_app_signature;
 std::atomic<jint> g_reported_security_state{0};
 
 [[noreturn]] void fatalIntegrityFailure(const char *reason) {
@@ -323,7 +324,7 @@ static bool findZipEocd(const uint8_t *zipData, size_t zipLength, size_t *eocdOf
     return false;
 }
 
-static bool verifyProtectedDexPayload(JNIEnv *env) {
+static bool verifyProtectedDexPayload(JNIEnv *env, const char *appSignature) {
     if (env == nullptr) {
         return false;
     }
@@ -371,11 +372,13 @@ static bool verifyProtectedDexPayload(JNIEnv *env) {
         }
 
         const char *authLabel = AY_OBFUSCATE("Parallax/dex/authentication/v1");
+        std::string authMaterial(authLabel);
+        authMaterial.append(appSignature == nullptr ? "" : appSignature);
         auto authenticationKey = hmac_sha256(
                 PARALLAX_UNKNOWN_DATA,
                 16,
-                reinterpret_cast<const uint8_t *>(authLabel),
-                strlen(authLabel));
+                reinterpret_cast<const uint8_t *>(authMaterial.data()),
+                authMaterial.size());
         if (authenticationKey.size() != 32) {
             break;
         }
@@ -413,13 +416,13 @@ PARALLAX_ENCRYPT jint securityStatus(JNIEnv *env, jclass, jobject context) {
     if (hasHookFrameworkMarker() || hasHookFrameworkClass(env)) {
         result |= SECURITY_HOOK_FRAMEWORK;
     }
-    if (!verifyProtectedDexPayload(env)) {
+    if (context != nullptr && !g_shell_config.app_sign_sha256.empty()) {
+        verifyAppSignature(env, context, g_shell_config.app_sign_sha256.c_str());
+    }
+    if (!verifyProtectedDexPayload(env, g_actual_app_signature.c_str())) {
         // A protected payload that no longer authenticates is either corrupted or was
         // rebuilt outside the one-way seal. There is no safe degraded mode.
         fatalIntegrityFailure("protected DEX payload authentication failed");
-    }
-    if (context != nullptr && !g_shell_config.app_sign_sha256.empty()) {
-        verifyAppSignature(env, context, g_shell_config.app_sign_sha256.c_str());
     }
     reportSecurityRisk(result & (SECURITY_TRACER | SECURITY_HOOK_FRAMEWORK | SECURITY_PAYLOAD_TAMPER));
     DLOGI("Parallax Protection policy status: 0x%x", result);
@@ -671,6 +674,7 @@ PARALLAX_ENCRYPT void verifyAppSignature(JNIEnv *env, jobject context, const cha
     }
 
     actual.assign(sha256Hex);
+    g_actual_app_signature.assign(sha256Hex);
 
     if (parallax_strncasecmp(sha256Hex, expectedSha256, 64) != 0) {
         fatalIntegrityFailure("signing certificate does not match the one-way seal");
