@@ -64,12 +64,10 @@ bool verifyNativeTextHash() {
             reinterpret_cast<uintptr_t>(info.dli_fbase)
             + static_cast<uintptr_t>(g_nativeTextSeal.textVirtualAddress));
     uint8_t digest[32] = {0};
-    if (mbedtls_sha256_ret(text,
-                           static_cast<size_t>(g_nativeTextSeal.textSize),
-                           digest,
-                           0) != 0) {
-        return false;
-    }
+    mbedtls_sha256(text,
+                   static_cast<size_t>(g_nativeTextSeal.textSize),
+                   digest,
+                   0);
     return constant_time_equal(digest, g_nativeTextSeal.digest, sizeof(digest));
 }
 
