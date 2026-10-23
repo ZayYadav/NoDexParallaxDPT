@@ -111,6 +111,14 @@ No client-side packer is unbreakable. The one-way seal blocks the normal
 unzip/dump/repack/re-sign recovery workflows and makes tampering fail closed; it does
 not defeat a determined reverse engineer with kernel-level instrumentation.
 
+On a rooted device, the decrypted DEX lives in the
+`InMemoryDexClassLoader` direct buffer (ART requires it to be readable). A passive
+`/proc/<pid>/mem` scan recovers the whole DEX in seconds; `MADV_DONTDUMP` and
+`PROT_NONE` do not stop it because `/proc/pid/mem` uses `FOLL_FORCE`. `memfd_secret`
+would help, but Android kernels commonly ship without `CONFIG_SECRETMEM`. Treat the
+seal as anti-static-recovery + tamper evidence, not as runtime-dump prevention.
+If the code must never be recoverable, keep it on a server and ship only a thin client.
+
 ## Notice
 
 This project has not too many tests, be careful use in prod environment. Otherwise, all consequences are at your own risk.
