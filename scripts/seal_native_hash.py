@@ -83,20 +83,27 @@ def main() -> int:
         return 1
 
     digest = hashlib.sha256(data[text_offset:text_offset + text_size]).digest()
-    marker = data.find(MAGIC)
-    if marker < 0 or data.find(MAGIC, marker + 1) >= 0:
-        print("native hash marker missing or duplicated", file=sys.stderr)
-        return 1
-    if bytes(data[marker + 56:marker + 64]) != TAIL:
-        print("native hash tail missing", file=sys.stderr)
+    candidates = []
+    cursor = 0
+    while True:
+        marker = data.find(MAGIC, cursor)
+        if marker < 0:
+            break
+        if bytes(data[marker + 56:marker + 64]) == TAIL:
+            candidates.append(marker)
+        cursor = marker + 1
+    if not candidates:
+        print("native hash marker/tail not found", file=sys.stderr)
         return 1
 
-    struct.pack_into("<Q", data, marker + 8, text_addr)
-    struct.pack_into("<Q", data, marker + 16, text_size)
-    data[marker + 24:marker + 56] = digest
+    for marker in candidates:
+        struct.pack_into("<Q", data, marker + 8, text_addr)
+        struct.pack_into("<Q", data, marker + 16, text_size)
+        data[marker + 24:marker + 56] = digest
     with open(path, "wb") as handle:
         handle.write(data)
-    print("sealed %s (.text %d bytes @ 0x%x)" % (path, text_size, text_addr))
+    print("sealed %s (.text %d bytes @ 0x%x, %d seal(s))" % (
+        path, text_size, text_addr, len(candidates)))
     return 0
 
 
