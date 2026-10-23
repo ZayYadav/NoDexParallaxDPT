@@ -30,7 +30,7 @@ struct NativeTextSeal {
 } __attribute__((packed));
 
 __attribute__((used, section(".data.parallax_seal"), aligned(8)))
-static const NativeTextSeal g_nativeTextSeal = {
+static NativeTextSeal g_nativeTextSeal = {
         {'P', 'X', 'H', 'A', 'S', 'H', '0', '1'},
         0,
         0,
