@@ -84,3 +84,10 @@
 # Any surviving helper/desugaring classes that are not explicitly mapped above are
 # still forced into the same release namespace.
 -repackageclasses Parallax.Enc
+
+# R8 renames members under allowobfuscation. The VM trampolines reference these
+# JNI entrypoints by their stable names, so keep the member names even though the
+# bridge class itself is deterministically remapped to Parallax.Enc.CrackWarTeamMC.
+-keepclassmembers class parallax.vm.Parallax16 {
+    public static native <methods>;
+}
