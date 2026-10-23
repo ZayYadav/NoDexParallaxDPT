@@ -95,6 +95,9 @@ usage: java -jar parallax.jar [option] -f <package_file>
   live header is repaired;
 - installs decoy DEX buffers with valid magic/checksum and random class data, so a
   memory dumper emits several unusable candidates alongside the real stubs;
+- streams every classic VM opcode array through a per-program HMAC-SHA256 keystream
+  with a keyed tag, decrypts only into a short-lived local buffer at call time, and
+  zeroes it after execution; a live opcode patch fails the tag check;
 - does **not** pin the signing certificate by default, so the sealed APK can be
   re-signed with any keystore;
 - audits the finished APK and aborts if any original `classes*.dex` header or digest is
@@ -158,8 +161,10 @@ On a rooted device, the decrypted DEX still lives in the `InMemoryDexClassLoader
 direct buffer because ART must read it. The shell invalidates that buffer's DEX header
 (checksum and SHA-1) right after loading and keeps re-randomizing it, so a raw dump
 starts as a corrupt DEX; it also plants decoy DEX buffers. The method bodies of
-VM-routed methods are native stubs, not original code. A determined
-attacker can repair the header and ignore the stubs, and a passive `/proc/<pid>/mem`
+VM-routed methods are native stubs, not original code. Classic VM opcodes are
+keystream-encrypted in memory and decrypted per call, but the build secret lives in the
+native library, so kernel-level instrumentation can eventually recover it. A determined
+attacker can repair the DEX header and ignore the stubs, and a passive `/proc/<pid>/mem`
 scan still recovers the remaining bytes. `MADV_DONTDUMP`/`PROT_NONE` do not stop it
 because `/proc/pid/mem` uses `FOLL_FORCE`; `memfd_secret` would help, but Android
 kernels commonly ship without `CONFIG_SECRETMEM`.
