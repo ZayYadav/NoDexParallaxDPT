@@ -131,8 +131,10 @@ static bool validate(const VmProgram &p, const VmOp &op) {
             break;
         case OP_ADD_LONG: case OP_SUB_LONG: case OP_MUL_LONG: case OP_DIV_LONG:
         case OP_REM_LONG: case OP_AND_LONG: case OP_OR_LONG: case OP_XOR_LONG:
-        case OP_SHL_LONG: case OP_SHR_LONG: case OP_USHR_LONG:
             if (!wideRegOk(p, op.a) || !wideRegOk(p, op.b) || !wideRegOk(p, op.c)) return false;
+            break;
+        case OP_SHL_LONG: case OP_SHR_LONG: case OP_USHR_LONG:
+            if (!wideRegOk(p, op.a) || !wideRegOk(p, op.b) || !regOk(p, op.c)) return false;
             break;
         default:
             return false;
@@ -357,13 +359,19 @@ static bool run(JNIEnv *env, uint32_t id, const uint64_t *args, size_t argc,
                 setLong(r, op.a, getLong(r, op.b) | getLong(r, op.c)); ++pc; break;
             case OP_XOR_LONG:
                 setLong(r, op.a, getLong(r, op.b) ^ getLong(r, op.c)); ++pc; break;
-            case OP_SHL_LONG:
-                setLong(r, op.a, getLong(r, op.b) << (getLong(r, op.c) & 63u)); ++pc; break;
-            case OP_SHR_LONG:
+            case OP_SHL_LONG: {
+                uint32_t count = static_cast<uint32_t>(r[op.c]) & 63u;
+                setLong(r, op.a, getLong(r, op.b) << count); ++pc; break;
+            }
+            case OP_SHR_LONG: {
+                uint32_t count = static_cast<uint32_t>(r[op.c]) & 63u;
                 setLong(r, op.a, static_cast<uint64_t>(static_cast<int64_t>(getLong(r, op.b))
-                        >> (getLong(r, op.c) & 63u))); ++pc; break;
-            case OP_USHR_LONG:
-                setLong(r, op.a, getLong(r, op.b) >> (getLong(r, op.c) & 63u)); ++pc; break;
+                        >> count)); ++pc; break;
+            }
+            case OP_USHR_LONG: {
+                uint32_t count = static_cast<uint32_t>(r[op.c]) & 63u;
+                setLong(r, op.a, getLong(r, op.b) >> count); ++pc; break;
+            }
             case OP_GOTO: pc = op.target; break;
             case OP_IF_EQZ: pc = r[op.a] == 0 ? op.target : pc + 1; break;
             case OP_IF_NEZ: pc = r[op.a] != 0 ? op.target : pc + 1; break;
