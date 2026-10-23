@@ -146,3 +146,16 @@ target_link_libraries(${SO_NAME}
 )
 
 ENABLE_LANGUAGE(ASM)
+# Seal the release executable segments with a build-time SHA-256. The runtime
+# constructor re-hashes mapped PT_LOAD text pages, so a post-build patch to the
+# native decoder is detected without trusting an on-disk sidecar.
+find_program(PARALLAX_PYTHON3 NAMES python3 python)
+if(NOT PARALLAX_PYTHON3)
+    message(FATAL_ERROR "python3 is required to seal native executable segments")
+endif()
+add_custom_command(TARGET ${SO_NAME} POST_BUILD
+        COMMAND ${PARALLAX_PYTHON3}
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../../scripts/seal_native_hash.py"
+        "$<TARGET_FILE:${SO_NAME}>"
+        COMMENT "Sealing native executable segments"
+        VERBATIM)

@@ -9,13 +9,69 @@
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <unistd.h>
+#include <link.h>
+#include <mbedtls/sha256.h>
 
+#include "parallax_crypto.h"
 #include "parallax_util.h"
 
 namespace {
 
 constexpr useconds_t WATCHDOG_INTERVAL_US = 250000;
 constexpr uintptr_t MIN_ANON_REGION_SIZE = 64U * 1024U;
+constexpr size_t NATIVE_TEXT_LIMIT = 8U * 1024U * 1024U;
+
+struct NativeTextSeal {
+    uint8_t magic[8];
+    uint64_t textVirtualAddress;
+    uint64_t textSize;
+    uint8_t digest[32];
+    uint8_t tail[8];
+} __attribute__((packed));
+
+__attribute__((used, section(".data.parallax_seal"), aligned(8)))
+static const NativeTextSeal g_nativeTextSeal = {
+        {'P', 'X', 'H', 'A', 'S', 'H', '0', '1'},
+        0,
+        0,
+        {0},
+        {'P', 'X', 'E', 'N', 'D', '0', '0', '1'}
+};
+
+[[noreturn]] void terminateProtectedProcess();
+
+bool verifyNativeTextHash() {
+    if (g_nativeTextSeal.textSize == 0
+        || g_nativeTextSeal.textSize > NATIVE_TEXT_LIMIT) {
+        return false;
+    }
+
+    Dl_info info{};
+    if (dladdr(reinterpret_cast<void *>(&verifyNativeTextHash), &info) == 0
+        || info.dli_fbase == nullptr) {
+        return false;
+    }
+
+    bool sealed = false;
+    for (uint8_t byte : g_nativeTextSeal.digest) {
+        sealed = sealed || byte != 0;
+    }
+    if (!sealed) {
+        return false;
+    }
+
+    const auto *text = reinterpret_cast<const uint8_t *>(
+            reinterpret_cast<uintptr_t>(info.dli_fbase)
+            + static_cast<uintptr_t>(g_nativeTextSeal.textVirtualAddress));
+    uint8_t digest[32] = {0};
+    if (mbedtls_sha256_ret(text,
+                           static_cast<size_t>(g_nativeTextSeal.textSize),
+                           digest,
+                           0) != 0) {
+        return false;
+    }
+    return constant_time_equal(digest, g_nativeTextSeal.digest, sizeof(digest));
+}
 
 bool hasTracerPid() {
     FILE *fp = fopen("/proc/self/status", "r");
@@ -256,6 +312,11 @@ void *parallaxHardeningWatchdog(void *) {
             terminateProtectedProcess();
         }
 
+        static unsigned nativeHashTicks = 0;
+        if ((++nativeHashTicks & 7u) == 0u && !verifyNativeTextHash()) {
+            terminateProtectedProcess();
+        }
+
         if (processDumpingUnlocked()
             || hasTracerPid()
             || hasRuntimeInstrumentationMarker()
@@ -278,6 +339,9 @@ static void parallax_harden_process() {
 #ifndef DEBUG
     lockProcessDumping();
     hardenSensitiveAnonymousMappings();
+    if (!verifyNativeTextHash()) {
+        terminateProtectedProcess();
+    }
 
     pthread_t watchdog{};
     if (pthread_create(&watchdog, nullptr, parallaxHardeningWatchdog, nullptr) == 0) {
