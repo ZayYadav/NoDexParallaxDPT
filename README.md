@@ -91,6 +91,10 @@ usage: java -jar parallax.jar [option] -f <package_file>
   closed** (the process is killed on mismatch);
 - overwrites the in-memory DEX header checksum/SHA-1 after ART has opened it, so a raw
   memory dump does not begin as a valid DEX (the loaded classes keep running);
+- re-randomizes those headers from the hardening watchdog and kills the process if the
+  live header is repaired;
+- installs decoy DEX buffers with valid magic/checksum and random class data, so a
+  memory dumper emits several unusable candidates alongside the real stubs;
 - does **not** pin the signing certificate by default, so the sealed APK can be
   re-signed with any keystore;
 - audits the finished APK and aborts if any original `classes*.dex` header or digest is
@@ -152,8 +156,9 @@ instrumentation.
 
 On a rooted device, the decrypted DEX still lives in the `InMemoryDexClassLoader`
 direct buffer because ART must read it. The shell invalidates that buffer's DEX header
-(checksum and SHA-1) right after loading, so a raw dump starts as a corrupt DEX; the
-method bodies of VM-routed methods are native stubs, not original code. A determined
+(checksum and SHA-1) right after loading and keeps re-randomizing it, so a raw dump
+starts as a corrupt DEX; it also plants decoy DEX buffers. The method bodies of
+VM-routed methods are native stubs, not original code. A determined
 attacker can repair the header and ignore the stubs, and a passive `/proc/<pid>/mem`
 scan still recovers the remaining bytes. `MADV_DONTDUMP`/`PROT_NONE` do not stop it
 because `/proc/pid/mem` uses `FOLL_FORCE`; `memfd_secret` would help, but Android
