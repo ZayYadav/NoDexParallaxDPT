@@ -9,6 +9,7 @@ import com.android.tools.smali.dexlib2.iface.Method;
 import com.android.tools.smali.dexlib2.iface.instruction.Instruction;
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethod;
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethodImplementation;
+import com.android.tools.smali.dexlib2.immutable.ImmutableMethodParameter;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction11x;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction21lh;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction21s;
@@ -16,6 +17,7 @@ import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstructio
 
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -69,16 +71,54 @@ public class HighValueVmTransformerLongTest {
         assertEquals(0xFFFFFFFF, op.target);
     }
 
+    @Test
+    public void mixedIntAndLongParametersAreAccepted() throws Exception {
+        Method method = method("mixed", List.of("I", "J"), "J", 4, List.of(
+                new ImmutableInstruction11x(Opcode.RETURN_WIDE, 0)
+        ));
+
+        HighValueVmTransformer.Program program = HighValueVmTransformer.compile(
+                4, "Lsample/LongOps;->mixed(IJ)J", method);
+
+        assertEquals(2, program.parameterCount);
+        assertEquals(3, program.parameterRegisters);
+        assertEquals(4, program.parameterTypes);
+        assertEquals(HighValueVmTransformer.Program.RETURN_LONG, program.returnType);
+    }
+
+    @Test
+    public void mixedParametersCanReturnInt() throws Exception {
+        Method method = method("mixedInt", List.of("J", "I"), "I", 4, List.of(
+                new ImmutableInstruction11x(Opcode.RETURN, 0)
+        ));
+
+        HighValueVmTransformer.Program program = HighValueVmTransformer.compile(
+                5, "Lsample/LongOps;->mixedInt(JI)I", method);
+
+        assertEquals(3, program.parameterRegisters);
+        assertEquals(1, program.parameterTypes);
+        assertEquals(HighValueVmTransformer.Program.RETURN_INT, program.returnType);
+    }
+
     private static Method longMethod(String name, List<Instruction> instructions) {
+        return method(name, Collections.emptyList(), "J", 1, instructions);
+    }
+
+    private static Method method(String name, List<String> parameterTypes, String returnType,
+                                 int registers, List<Instruction> instructions) {
+        List<ImmutableMethodParameter> parameters = new ArrayList<>();
+        for (String type : parameterTypes) {
+            parameters.add(new ImmutableMethodParameter(type, null, null));
+        }
         Method method = new ImmutableMethod(
                 "Lsample/LongOps;",
                 name,
-                Collections.emptyList(),
-                "J",
+                parameters,
+                returnType,
                 AccessFlags.PUBLIC.getValue() | AccessFlags.STATIC.getValue(),
                 null,
                 null,
-                new ImmutableMethodImplementation(1, instructions, null, null)
+                new ImmutableMethodImplementation(registers, instructions, null, null)
         );
         assertNotNull(method.getImplementation());
         return method;

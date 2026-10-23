@@ -22,6 +22,7 @@ import com.android.tools.smali.dexlib2.immutable.ImmutableMethod;
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethodImplementation;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction10x;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction11x;
+import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction12x;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction22x;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction31i;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction35c;
@@ -322,7 +323,6 @@ public final class HighValueVmTransformer {
 
         int parameterRegisters = 0;
         int parameterTypes = 0;
-        char parameterType = 0;
         for (int i = 0; i < method.getParameterTypes().size(); i++) {
             String type = method.getParameterTypes().get(i).toString();
             char kind;
@@ -330,8 +330,6 @@ public final class HighValueVmTransformer {
             if ("I".equals(type)) { kind = 'I'; width = 1; }
             else if ("J".equals(type)) { kind = 'J'; width = 2; }
             else throw unsupported(signature, "v2 accepts only int or long parameters");
-            if (parameterType == 0) parameterType = kind;
-            else if (parameterType != kind) throw unsupported(signature, "v2 requires homogeneous parameter types");
             parameterRegisters += width;
             parameterTypes |= (kind == 'J' ? 1 : 0) << (i * 2);
         }
@@ -342,12 +340,6 @@ public final class HighValueVmTransformer {
         else if ("I".equals(returnTypeName)) returnType = Program.RETURN_INT;
         else if ("J".equals(returnTypeName)) returnType = Program.RETURN_LONG;
         else throw unsupported(signature, "v2 return type must be int, long or void");
-        if (returnType == Program.RETURN_LONG && parameterType == 'I') {
-            throw unsupported(signature, "v2 long return requires long or no parameters");
-        }
-        if (parameterType == 'J' && returnType == Program.RETURN_INT) {
-            throw unsupported(signature, "v2 long parameters require long or void return");
-        }
 
         MethodImplementation impl = method.getImplementation();
         if (impl == null) throw unsupported(signature, "method has no implementation");
@@ -520,10 +512,13 @@ public final class HighValueVmTransformer {
     private static Method rewriteAsTrampoline(Method method, int methodId, String bridgeClassSig) {
         int params = method.getParameterTypes().size();
         String returnType = method.getReturnType().toString();
-        boolean wideMethod = false;
+        boolean hasLongParam = false;
+        boolean hasIntParam = false;
         for (CharSequence type : method.getParameterTypes()) {
-            if ("J".contentEquals(type)) wideMethod = true;
+            if ("J".contentEquals(type)) hasLongParam = true;
+            else hasIntParam = true;
         }
+        boolean widened = hasIntParam && (hasLongParam || "J".equals(returnType));
 
         int parameterRegisters = 0;
         List<String> bridgeParams = new ArrayList<>();
@@ -531,41 +526,58 @@ public final class HighValueVmTransformer {
         for (CharSequence type : method.getParameterTypes()) {
             String value = type.toString();
             parameterRegisters += "J".equals(value) ? 2 : 1;
-            bridgeParams.add(value);
+            bridgeParams.add(widened ? "J" : value);
         }
 
         String bridgeName;
-        if ("V".equals(returnType)) {
-            bridgeName = (wideMethod ? "hvjv" : "hvv") + params;
+        if (widened) {
+            bridgeName = ("V".equals(returnType) ? "hvjv" : "hvj") + params;
+        } else if ("V".equals(returnType)) {
+            bridgeName = (hasLongParam ? "hvjv" : "hvv") + params;
         } else if ("J".equals(returnType)) {
             bridgeName = "hvj" + params;
         } else {
             bridgeName = "hvi" + params;
         }
         ImmutableMethodReference bridge = new ImmutableMethodReference(
-                bridgeClassSig, bridgeName, bridgeParams, returnType);
+                bridgeClassSig, bridgeName, bridgeParams,
+                "V".equals(returnType) ? "V" : (widened ? "J" : returnType));
+        int callRegisters = widened ? 1 + params * 2 : 1 + parameterRegisters;
 
         List<Instruction> code = new ArrayList<>();
         int frame = 1 + parameterRegisters * 2;
-        if ("J".equals(returnType) && frame < 2) frame = 2;
+        if (widened) frame = Math.max(frame, 1 + params * 2);
+        if (("J".equals(returnType) || widened) && frame < 2) frame = 2;
         int incomingBase = 1 + parameterRegisters;
         int offset = 0;
         for (CharSequence type : method.getParameterTypes()) {
             boolean wide = "J".contentEquals(type);
-            code.add(new ImmutableInstruction22x(
-                    wide ? Opcode.MOVE_WIDE_FROM16 : Opcode.MOVE_FROM16,
-                    1 + offset, incomingBase + offset));
+            if (widened) {
+                code.add(new ImmutableInstruction12x(
+                        wide ? Opcode.MOVE_WIDE : Opcode.INT_TO_LONG,
+                        1 + offset, incomingBase + offset));
+            } else {
+                code.add(new ImmutableInstruction22x(
+                        wide ? Opcode.MOVE_WIDE_FROM16 : Opcode.MOVE_FROM16,
+                        1 + offset, incomingBase + offset));
+            }
             offset += wide ? 2 : 1;
         }
         code.add(new ImmutableInstruction31i(Opcode.CONST, 0, methodId));
         code.add(new ImmutableInstruction3rc(Opcode.INVOKE_STATIC_RANGE, 0,
-                1 + parameterRegisters, bridge));
+                callRegisters, bridge));
         if ("J".equals(returnType)) {
             code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_WIDE, 0));
             code.add(new ImmutableInstruction11x(Opcode.RETURN_WIDE, 0));
         } else if ("I".equals(returnType)) {
-            code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT, 0));
-            code.add(new ImmutableInstruction11x(Opcode.RETURN, 0));
+            if (widened) {
+                code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_WIDE, 0));
+                code.add(new ImmutableInstruction12x(Opcode.LONG_TO_INT, 0, 0));
+                code.add(new ImmutableInstruction11x(Opcode.RETURN, 0));
+            } else {
+                code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT, 0));
+                code.add(new ImmutableInstruction11x(Opcode.RETURN, 0));
+            }
         } else {
             code.add(new ImmutableInstruction10x(Opcode.RETURN_VOID));
         }

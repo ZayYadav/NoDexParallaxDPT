@@ -150,22 +150,19 @@ final class AutomaticVmSelector {
         if ("<init>".equals(method.getName()) || "<clinit>".equals(method.getName())) return null;
         if (method.getParameterTypes().size() > 4) return null;
 
-        char valueType = 0;
+        boolean hasLongParam = false;
         int parameterRegisters = 0;
         for (CharSequence type : method.getParameterTypes()) {
             char kind;
             if ("I".contentEquals(type)) kind = 'I';
             else if ("J".contentEquals(type)) kind = 'J';
             else return null;
-            if (valueType == 0) valueType = kind;
-            else if (valueType != kind) return null;
+            if (kind == 'J') hasLongParam = true;
             parameterRegisters += kind == 'J' ? 2 : 1;
         }
         String returnType = method.getReturnType().toString();
         if (!"I".equals(returnType) && !"J".equals(returnType) && !"V".equals(returnType)) return null;
-        if (valueType == 0) valueType = "J".equals(returnType) ? 'J' : 'I';
-        if ("J".equals(returnType) && valueType != 'J') return null;
-        if (valueType == 'J' && "I".equals(returnType)) return null;
+        char valueType = hasLongParam || "J".equals(returnType) ? 'J' : 'I';
 
         MethodImplementation impl = method.getImplementation();
         if (impl == null || !impl.getTryBlocks().isEmpty()) return null;
