@@ -408,9 +408,9 @@ void poisonInMemoryDexHeaders() {
         if (data == nullptr || size < 32 || memcmp(data, "dex\n", 4) != 0) {
             continue;
         }
-        // checksum (8..11) and SHA-1 signature (12..31) are only validated when
-        // ART opens the DEX; classes already loaded keep working from the same buffer.
-        for (size_t i = 8; i < 32; i++) {
+        // The loader has already validated and opened this buffer, so the magic,
+        // checksum and SHA-1 signature are no longer needed by ART.
+        for (size_t i = 0; i < 32; i++) {
             state ^= state << 13;
             state ^= state >> 7;
             state ^= state << 17;
