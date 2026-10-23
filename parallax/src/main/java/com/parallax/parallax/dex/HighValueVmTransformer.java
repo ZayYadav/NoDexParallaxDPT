@@ -22,6 +22,7 @@ import com.android.tools.smali.dexlib2.immutable.ImmutableMethod;
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethodImplementation;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction10x;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction11x;
+import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction22x;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction31i;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction35c;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction3rc;
@@ -549,7 +550,7 @@ public final class HighValueVmTransformer {
         if ("J".equals(returnType) && frame < 2) frame = 2;
         int incomingBase = 1 + parameterRegisters;
         for (int i = 0; i < parameterRegisters; i++) {
-            code.add(new ImmutableInstruction11x(Opcode.MOVE, 1 + i, incomingBase + i));
+            code.add(new ImmutableInstruction22x(Opcode.MOVE_FROM16, 1 + i, incomingBase + i));
         }
         code.add(new ImmutableInstruction31i(Opcode.CONST, 0, methodId));
         code.add(new ImmutableInstruction3rc(Opcode.INVOKE_STATIC_RANGE, 0,
