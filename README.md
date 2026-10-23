@@ -89,6 +89,8 @@ usage: java -jar parallax.jar [option] -f <package_file>
   heuristic, and logs routed/eligible/deferred/unsupported coverage for the build;
 - forces Frida/CRC/anti-debug checks and native payload authentication to **fail
   closed** (the process is killed on mismatch);
+- overwrites the in-memory DEX header checksum/SHA-1 after ART has opened it, so a raw
+  memory dump does not begin as a valid DEX (the loaded classes keep running);
 - does **not** pin the signing certificate by default, so the sealed APK can be
   re-signed with any keystore;
 - audits the finished APK and aborts if any original `classes*.dex` header or digest is
@@ -148,12 +150,17 @@ protected APK accepts any certificate by default, and the original APK can alway
 re-signed). It does not defeat a determined reverse engineer with kernel-level
 instrumentation.
 
-On a rooted device, the decrypted DEX lives in the
-`InMemoryDexClassLoader` direct buffer (ART requires it to be readable). A passive
-`/proc/<pid>/mem` scan recovers the whole DEX in seconds; `MADV_DONTDUMP` and
-`PROT_NONE` do not stop it because `/proc/pid/mem` uses `FOLL_FORCE`. `memfd_secret`
-would help, but Android kernels commonly ship without `CONFIG_SECRETMEM`. Treat the
-seal as anti-static-recovery + tamper evidence, not as runtime-dump prevention.
+On a rooted device, the decrypted DEX still lives in the `InMemoryDexClassLoader`
+direct buffer because ART must read it. The shell invalidates that buffer's DEX header
+(checksum and SHA-1) right after loading, so a raw dump starts as a corrupt DEX; the
+method bodies of VM-routed methods are native stubs, not original code. A determined
+attacker can repair the header and ignore the stubs, and a passive `/proc/<pid>/mem`
+scan still recovers the remaining bytes. `MADV_DONTDUMP`/`PROT_NONE` do not stop it
+because `/proc/pid/mem` uses `FOLL_FORCE`; `memfd_secret` would help, but Android
+kernels commonly ship without `CONFIG_SECRETMEM`.
+
+Treat the seal as anti-static-recovery + tamper evidence + dump sabotage, not as
+runtime-dump prevention.
 If the code must never be recoverable, keep it on a server and ship only a thin client.
 
 ## Notice
