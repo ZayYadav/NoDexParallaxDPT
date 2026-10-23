@@ -99,12 +99,37 @@ public class HighValueVmTransformerLongTest {
         assertEquals(HighValueVmTransformer.Program.RETURN_DOUBLE, program.returnType);
     }
 
-    @Test(expected = java.io.IOException.class)
-    public void floatingAndIntegerParametersCannotMix() throws Exception {
-        Method method = method("invalid", List.of("I", "F"), "F", 3, List.of(
+    @Test
+    public void mixedIntAndFloatParametersUseDoubleBridge() throws Exception {
+        Method method = method("blend", List.of("I", "F"), "F", 3, List.of(
                 new ImmutableInstruction11x(Opcode.RETURN, 0)
         ));
-        HighValueVmTransformer.compile(8, "Lsample/LongOps;->invalid(IF)F", method);
+        HighValueVmTransformer.Program program = HighValueVmTransformer.compile(
+                8, "Lsample/LongOps;->blend(IF)F", method);
+        assertEquals(2, program.parameterCount);
+        assertEquals(2, program.parameterRegisters);
+        assertEquals(8, program.parameterTypes);
+        assertEquals(HighValueVmTransformer.Program.RETURN_FLOAT, program.returnType);
+        assertEquals(true, program.doubleArguments);
+    }
+
+    @Test
+    public void doubleParametersCanReturnFloat() throws Exception {
+        Method method = method("narrow", List.of("D"), "F", 3, List.of(
+                new ImmutableInstruction11x(Opcode.RETURN, 0)
+        ));
+        HighValueVmTransformer.Program program = HighValueVmTransformer.compile(
+                9, "Lsample/LongOps;->narrow(D)F", method);
+        assertEquals(HighValueVmTransformer.Program.RETURN_FLOAT, program.returnType);
+        assertEquals(true, program.doubleArguments);
+    }
+
+    @Test(expected = java.io.IOException.class)
+    public void longAndFloatingParametersCannotMix() throws Exception {
+        Method method = method("invalid", List.of("J", "F"), "F", 4, List.of(
+                new ImmutableInstruction11x(Opcode.RETURN, 0)
+        ));
+        HighValueVmTransformer.compile(10, "Lsample/LongOps;->invalid(JF)F", method);
     }
 
     @Test

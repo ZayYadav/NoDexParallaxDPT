@@ -203,12 +203,20 @@ public final class HighValueVmTransformer {
 
         final int id, registerCount, parameterCount, parameterRegisters, parameterTypes, returnType;
         final boolean returnsValue;
+        final boolean doubleArguments;
         final List<VmOp> ops;
         Program(int id, int registerCount, int parameterCount, int parameterRegisters,
                 int parameterTypes, int returnType, List<VmOp> ops) {
+            this(id, registerCount, parameterCount, parameterRegisters, parameterTypes,
+                    returnType, false, ops);
+        }
+
+        Program(int id, int registerCount, int parameterCount, int parameterRegisters,
+                int parameterTypes, int returnType, boolean doubleArguments, List<VmOp> ops) {
             this.id = id; this.registerCount = registerCount; this.parameterCount = parameterCount;
             this.parameterRegisters = parameterRegisters; this.parameterTypes = parameterTypes;
             this.returnType = returnType; this.returnsValue = returnType != RETURN_VOID;
+            this.doubleArguments = doubleArguments;
             this.ops = ops;
         }
 
@@ -322,7 +330,7 @@ public final class HighValueVmTransformer {
                 out.writeByte(p.parameterCount);
                 out.writeByte(p.parameterRegisters);
                 out.writeByte(p.parameterTypes);
-                out.writeByte(p.returnType);
+                out.writeByte(p.returnType | (p.doubleArguments ? 0x80 : 0));
                 out.writeInt(p.ops.size());
                 for (VmOp op : p.ops) {
                     out.writeByte(op.opcode); out.writeByte(op.a); out.writeByte(op.b); out.writeByte(op.c);
@@ -340,6 +348,22 @@ public final class HighValueVmTransformer {
         return out.append(')').append(method.getReturnType()).toString();
     }
 
+    private static boolean requiresDoubleBridge(Method method, int returnType) {
+        List<? extends CharSequence> types = method.getParameterTypes();
+        if (types.isEmpty()) return false;
+        boolean allFloat = true;
+        boolean allDouble = true;
+        for (CharSequence type : types) {
+            if (!"F".contentEquals(type)) allFloat = false;
+            if (!"D".contentEquals(type)) allDouble = false;
+        }
+        if (allFloat && (returnType == Program.RETURN_FLOAT
+                || returnType == Program.RETURN_VOID)) return false;
+        if (allDouble && (returnType == Program.RETURN_DOUBLE
+                || returnType == Program.RETURN_VOID)) return false;
+        return true;
+    }
+
     static Program compile(int methodId, String signature, Method method) throws IOException {
         int flags = method.getAccessFlags();
         if ((flags & AccessFlags.STATIC.getValue()) == 0) throw unsupported(signature, "method must be static");
@@ -351,21 +375,18 @@ public final class HighValueVmTransformer {
 
         int parameterRegisters = 0;
         int parameterTypes = 0;
-        char parameterGroup = 0;
+        boolean hasLongParam = false;
+        boolean hasFloatParam = false;
+        boolean hasDoubleParam = false;
         for (int i = 0; i < method.getParameterTypes().size(); i++) {
             String type = method.getParameterTypes().get(i).toString();
             int kind;
             int width;
             if ("I".equals(type)) { kind = 0; width = 1; }
-            else if ("J".equals(type)) { kind = 1; width = 2; }
-            else if ("F".equals(type)) { kind = 2; width = 1; }
-            else if ("D".equals(type)) { kind = 3; width = 2; }
+            else if ("J".equals(type)) { kind = 1; width = 2; hasLongParam = true; }
+            else if ("F".equals(type)) { kind = 2; width = 1; hasFloatParam = true; }
+            else if ("D".equals(type)) { kind = 3; width = 2; hasDoubleParam = true; }
             else throw unsupported(signature, "v2 accepts only int, long, float or double parameters");
-            char group = kind < 2 ? 'N' : type.charAt(0);
-            if (parameterGroup == 0) parameterGroup = group;
-            else if (parameterGroup != group) {
-                throw unsupported(signature, "v2 cannot mix floating and integer parameters");
-            }
             parameterRegisters += width;
             parameterTypes |= kind << (i * 2);
         }
@@ -378,18 +399,13 @@ public final class HighValueVmTransformer {
         else if ("F".equals(returnTypeName)) returnType = Program.RETURN_FLOAT;
         else if ("D".equals(returnTypeName)) returnType = Program.RETURN_DOUBLE;
         else throw unsupported(signature, "v2 return type must be int, long, float, double or void");
-        if (parameterGroup == 'N' && (returnType == Program.RETURN_FLOAT
-                || returnType == Program.RETURN_DOUBLE)) {
-            throw unsupported(signature, "v2 integer parameters cannot return a floating value");
+
+        boolean floating = hasFloatParam || hasDoubleParam
+                || returnType == Program.RETURN_FLOAT || returnType == Program.RETURN_DOUBLE;
+        if (floating && hasLongParam) {
+            throw unsupported(signature, "v2 cannot combine long with float/double parameters");
         }
-        if (parameterGroup == 'F' && returnType != Program.RETURN_VOID
-                && returnType != Program.RETURN_FLOAT) {
-            throw unsupported(signature, "v2 float parameters require float or void return");
-        }
-        if (parameterGroup == 'D' && returnType != Program.RETURN_VOID
-                && returnType != Program.RETURN_DOUBLE) {
-            throw unsupported(signature, "v2 double parameters require double or void return");
-        }
+        boolean uplift = floating && requiresDoubleBridge(method, returnType);
 
         MethodImplementation impl = method.getImplementation();
         if (impl == null) throw unsupported(signature, "method has no implementation");
@@ -414,7 +430,7 @@ public final class HighValueVmTransformer {
             address += i.getCodeUnits();
         }
         return new Program(methodId, registerCount, method.getParameterTypes().size(),
-                parameterRegisters, parameterTypes, returnType, ops);
+                parameterRegisters, parameterTypes, returnType, uplift, ops);
     }
 
     private static IOException unsupported(String signature, String why) {
@@ -612,6 +628,11 @@ public final class HighValueVmTransformer {
                 || "F".equals(returnType) || "D".equals(returnType);
         boolean doubleKind = hasDoubleParam || "D".equals(returnType);
         boolean widened = !floating && hasIntParam && (hasLongParam || "J".equals(returnType));
+        int returnCode = "V".equals(returnType) ? Program.RETURN_VOID
+                : "I".equals(returnType) ? Program.RETURN_INT
+                : "J".equals(returnType) ? Program.RETURN_LONG
+                : "F".equals(returnType) ? Program.RETURN_FLOAT : Program.RETURN_DOUBLE;
+        boolean uplift = floating && requiresDoubleBridge(method, returnCode);
 
         int parameterRegisters = 0;
         List<String> bridgeParams = new ArrayList<>();
@@ -619,11 +640,13 @@ public final class HighValueVmTransformer {
         for (CharSequence type : method.getParameterTypes()) {
             String value = type.toString();
             parameterRegisters += ("J".equals(value) || "D".equals(value)) ? 2 : 1;
-            bridgeParams.add(widened ? "J" : value);
+            bridgeParams.add(uplift ? "D" : (widened ? "J" : value));
         }
 
         String bridgeName;
-        if (floating) {
+        if (uplift) {
+            bridgeName = ("V".equals(returnType) ? "hvdv" : "hvd") + params;
+        } else if (floating) {
             bridgeName = ("V".equals(returnType) ? (doubleKind ? "hvdv" : "hvfv")
                     : (doubleKind ? "hvd" : "hvf")) + params;
         } else if (widened) {
@@ -637,19 +660,40 @@ public final class HighValueVmTransformer {
         }
         ImmutableMethodReference bridge = new ImmutableMethodReference(
                 bridgeClassSig, bridgeName, bridgeParams,
-                "V".equals(returnType) ? "V" : (widened ? "J" : returnType));
-        int callRegisters = widened ? 1 + params * 2 : 1 + parameterRegisters;
+                "V".equals(returnType) ? "V"
+                        : (uplift ? "D" : (widened ? "J" : returnType)));
+        int callRegisters = (widened || uplift) ? 1 + params * 2 : 1 + parameterRegisters;
 
         List<Instruction> code = new ArrayList<>();
-        int frame = 1 + parameterRegisters * 2;
+        int frame = uplift
+                ? 1 + parameterRegisters * 2 + params * 2
+                : 1 + parameterRegisters * 2;
         if (widened) frame = Math.max(frame, 1 + params * 2);
-        if (("J".equals(returnType) || "D".equals(returnType) || widened) && frame < 2) frame = 2;
-        int incomingBase = 1 + parameterRegisters;
+        if (("J".equals(returnType) || "D".equals(returnType) || widened || uplift)
+                && frame < 2) frame = 2;
+        int incomingBase = frame - parameterRegisters;
         int destination = 1;
         int offset = 0;
+        int temp = 1 + params * 2;
         for (CharSequence type : method.getParameterTypes()) {
             boolean wide = "J".contentEquals(type) || "D".contentEquals(type);
-            if (widened) {
+            if (uplift) {
+                if (wide) {
+                    code.add(new ImmutableInstruction22x(Opcode.MOVE_WIDE_FROM16,
+                            destination, incomingBase + offset));
+                } else if ("F".contentEquals(type)) {
+                    code.add(new ImmutableInstruction22x(Opcode.MOVE_FROM16,
+                            temp, incomingBase + offset));
+                    code.add(new ImmutableInstruction12x(Opcode.FLOAT_TO_DOUBLE,
+                            destination, temp));
+                } else {
+                    code.add(new ImmutableInstruction22x(Opcode.MOVE_FROM16,
+                            temp, incomingBase + offset));
+                    code.add(new ImmutableInstruction12x(Opcode.INT_TO_DOUBLE,
+                            destination, temp));
+                }
+                destination += 2;
+            } else if (widened) {
                 code.add(new ImmutableInstruction12x(
                         wide ? Opcode.MOVE_WIDE : Opcode.INT_TO_LONG,
                         destination, incomingBase + offset));
@@ -664,7 +708,26 @@ public final class HighValueVmTransformer {
         code.add(new ImmutableInstruction31i(Opcode.CONST, 0, methodId));
         code.add(new ImmutableInstruction3rc(Opcode.INVOKE_STATIC_RANGE, 0,
                 callRegisters, bridge));
-        if ("J".equals(returnType) || "D".equals(returnType)) {
+        if (uplift) {
+            if ("V".equals(returnType)) {
+                code.add(new ImmutableInstruction10x(Opcode.RETURN_VOID));
+            } else if ("D".equals(returnType)) {
+                code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_WIDE, 0));
+                code.add(new ImmutableInstruction11x(Opcode.RETURN_WIDE, 0));
+            } else if ("J".equals(returnType)) {
+                code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_WIDE, 0));
+                code.add(new ImmutableInstruction12x(Opcode.DOUBLE_TO_LONG, 0, 0));
+                code.add(new ImmutableInstruction11x(Opcode.RETURN_WIDE, 0));
+            } else if ("F".equals(returnType)) {
+                code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_WIDE, 0));
+                code.add(new ImmutableInstruction12x(Opcode.DOUBLE_TO_FLOAT, 0, 0));
+                code.add(new ImmutableInstruction11x(Opcode.RETURN, 0));
+            } else {
+                code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_WIDE, 0));
+                code.add(new ImmutableInstruction12x(Opcode.DOUBLE_TO_INT, 0, 0));
+                code.add(new ImmutableInstruction11x(Opcode.RETURN, 0));
+            }
+        } else if ("J".equals(returnType) || "D".equals(returnType)) {
             code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_WIDE, 0));
             code.add(new ImmutableInstruction11x(Opcode.RETURN_WIDE, 0));
         } else if ("I".equals(returnType) || "F".equals(returnType)) {

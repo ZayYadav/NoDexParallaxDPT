@@ -150,7 +150,8 @@ final class AutomaticVmSelector {
         if ("<init>".equals(method.getName()) || "<clinit>".equals(method.getName())) return null;
         if (method.getParameterTypes().size() > 4) return null;
 
-        char parameterGroup = 0;
+        boolean hasLong = false;
+        boolean hasFloating = false;
         boolean classic = false;
         int parameterRegisters = 0;
         for (CharSequence type : method.getParameterTypes()) {
@@ -160,18 +161,15 @@ final class AutomaticVmSelector {
             else if ("F".contentEquals(type)) kind = 'F';
             else if ("D".contentEquals(type)) kind = 'D';
             else return null;
-            char group = (kind == 'I' || kind == 'J') ? 'N' : kind;
-            if (parameterGroup == 0) parameterGroup = group;
-            else if (parameterGroup != group) return null;
+            if (kind == 'J') hasLong = true;
+            if (kind == 'F' || kind == 'D') hasFloating = true;
             if (kind != 'I') classic = true;
             parameterRegisters += (kind == 'J' || kind == 'D') ? 2 : 1;
         }
         String returnType = method.getReturnType().toString();
         if (!"I".equals(returnType) && !"J".equals(returnType) && !"V".equals(returnType)
                 && !"F".equals(returnType) && !"D".equals(returnType)) return null;
-        if (parameterGroup == 'F' && !"F".equals(returnType) && !"V".equals(returnType)) return null;
-        if (parameterGroup == 'D' && !"D".equals(returnType) && !"V".equals(returnType)) return null;
-        if (parameterGroup == 'N' && ("F".equals(returnType) || "D".equals(returnType))) return null;
+        if (hasLong && hasFloating) return null;
         if (!"I".equals(returnType) && !"V".equals(returnType)) classic = true;
         char valueType = classic ? 'J' : 'I';
 

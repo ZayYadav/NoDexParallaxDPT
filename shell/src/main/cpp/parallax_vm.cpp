@@ -73,6 +73,7 @@ struct VmProgram {
     uint8_t parameterTypes = 0;
     uint8_t returnType = RET_VOID;
     bool returnsValue = false;
+    bool doubleArguments = false;
     std::vector<VmOp> ops;
 };
 
@@ -213,7 +214,9 @@ static bool parsePayload(const std::vector<uint8_t> &raw) {
         p.parameters = raw[cursor++];
         p.parameterRegisters = raw[cursor++];
         p.parameterTypes = raw[cursor++];
-        p.returnType = raw[cursor++];
+        uint8_t returnFlags = raw[cursor++];
+        p.doubleArguments = (returnFlags & 0x80u) != 0;
+        p.returnType = static_cast<uint8_t>(returnFlags & 0x7fu);
         uint32_t opCount = be32(raw.data() + cursor); cursor += 4;
         if (id == 0 || p.registers == 0 || p.registers > 255 || p.parameters > 4
                 || p.parameterRegisters > p.registers || p.returnType > RET_DOUBLE
@@ -225,6 +228,7 @@ static bool parsePayload(const std::vector<uint8_t> &raw) {
             if (kind == PARAM_INT || kind == PARAM_FLOAT) width += 1;
             else if (kind == PARAM_LONG || kind == PARAM_DOUBLE) width += 2;
             else return false;
+            if (p.doubleArguments && kind == PARAM_LONG) return false;
         }
         if (width != p.parameterRegisters) return false;
         p.returnsValue = p.returnType != RET_VOID;
@@ -352,7 +356,23 @@ static bool run(JNIEnv *env, uint32_t id, const uint64_t *args, size_t argc,
     size_t parameterOffset = 0;
     for (size_t i = 0; i < argc; ++i) {
         uint8_t kind = (p.parameterTypes >> (i * 2u)) & 0x3u;
-        if (kind == PARAM_LONG || kind == PARAM_DOUBLE) {
+        if (p.doubleArguments) {
+            double value = doubleFromBits(args[i]);
+            if (kind == PARAM_DOUBLE) {
+                setLong(r, static_cast<uint8_t>(parameterBase + parameterOffset), args[i]);
+                parameterOffset += 2;
+            } else if (kind == PARAM_FLOAT) {
+                r[parameterBase + parameterOffset] =
+                        static_cast<int32_t>(bitsFromFloat(static_cast<float>(value)));
+                parameterOffset += 1;
+            } else if (kind == PARAM_INT) {
+                r[parameterBase + parameterOffset] = javaDoubleToInt(value);
+                parameterOffset += 1;
+            } else {
+                reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
+                return false;
+            }
+        } else if (kind == PARAM_LONG || kind == PARAM_DOUBLE) {
             setLong(r, static_cast<uint8_t>(parameterBase + parameterOffset), args[i]);
             parameterOffset += 2;
         } else {
