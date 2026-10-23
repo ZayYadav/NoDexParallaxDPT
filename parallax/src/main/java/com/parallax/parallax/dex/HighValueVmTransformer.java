@@ -549,8 +549,13 @@ public final class HighValueVmTransformer {
         int frame = 1 + parameterRegisters * 2;
         if ("J".equals(returnType) && frame < 2) frame = 2;
         int incomingBase = 1 + parameterRegisters;
-        for (int i = 0; i < parameterRegisters; i++) {
-            code.add(new ImmutableInstruction22x(Opcode.MOVE_FROM16, 1 + i, incomingBase + i));
+        int offset = 0;
+        for (CharSequence type : method.getParameterTypes()) {
+            boolean wide = "J".contentEquals(type);
+            code.add(new ImmutableInstruction22x(
+                    wide ? Opcode.MOVE_WIDE_FROM16 : Opcode.MOVE_FROM16,
+                    1 + offset, incomingBase + offset));
+            offset += wide ? 2 : 1;
         }
         code.add(new ImmutableInstruction31i(Opcode.CONST, 0, methodId));
         code.add(new ImmutableInstruction3rc(Opcode.INVOKE_STATIC_RANGE, 0,
