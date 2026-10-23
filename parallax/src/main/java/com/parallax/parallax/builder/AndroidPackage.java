@@ -981,6 +981,7 @@ public abstract class AndroidPackage {
         try (RandomAccessFile in = new RandomAccessFile(inputPackagePath, "r");
              FileOutputStream out = new FileOutputStream(outputPackagePath)) {
             ZipAlign.alignZip(in, out);
+            out.getFD().sync();
         }
     }
 

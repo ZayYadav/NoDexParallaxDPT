@@ -6,6 +6,7 @@
 #include <android/api-level.h>
 #include <atomic>
 #include <climits>
+#include <cstring>
 #include <signal.h>
 #include <stdint.h>
 #include <string>
@@ -372,13 +373,11 @@ static bool verifyProtectedDexPayload(JNIEnv *env, const char *appSignature) {
         }
 
         const char *authLabel = AY_OBFUSCATE("Parallax/dex/authentication/v1");
-        std::string authMaterial(authLabel);
-        authMaterial.append(appSignature == nullptr ? "" : appSignature);
         auto authenticationKey = hmac_sha256(
                 PARALLAX_UNKNOWN_DATA,
                 16,
-                reinterpret_cast<const uint8_t *>(authMaterial.data()),
-                authMaterial.size());
+                reinterpret_cast<const uint8_t *>(authLabel),
+                strlen(authLabel));
         if (authenticationKey.size() != 32) {
             break;
         }

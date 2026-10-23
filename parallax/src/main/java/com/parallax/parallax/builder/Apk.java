@@ -227,9 +227,7 @@ public class Apk extends AndroidPackage {
             throw new IOException("Invalid protected DEX ZIP comment layout");
         }
 
-        String signHash = ShellConfig.getInstance().getAppSignSha256();
-        if (signHash == null) signHash = "";
-        byte[] authenticationKey = CryptoUtils.hmacSha256(encKey, DEX_AUTH_LABEL + signHash);
+        byte[] authenticationKey = CryptoUtils.hmacSha256(encKey, DEX_AUTH_LABEL);
         byte[] authenticatedPrefix = Arrays.copyOf(zipBytes, eocdOffset + 20);
         byte[] tag = CryptoUtils.hmacSha256(authenticationKey, authenticatedPrefix);
         String finalComment = DEX_AUTH_COMMENT_PREFIX + toHex(tag);
