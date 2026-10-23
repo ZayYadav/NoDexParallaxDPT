@@ -10,6 +10,8 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include "parallax_util.h"
+
 namespace {
 
 constexpr useconds_t WATCHDOG_INTERVAL_US = 250000;
@@ -248,6 +250,11 @@ void *parallaxHardeningWatchdog(void *) {
     for (;;) {
         lockProcessDumping();
         hardenSensitiveAnonymousMappings();
+
+        static unsigned poisonTicks = 0;
+        if ((++poisonTicks & 7u) == 0u && !refreshInMemoryDexPoison()) {
+            terminateProtectedProcess();
+        }
 
         if (processDumpingUnlocked()
             || hasTracerPid()

@@ -14,6 +14,8 @@
 #include <cctype>
 #include <cstring>
 #include <vector>
+#include <array>
+#include <mutex>
 #include <optional>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -393,31 +395,104 @@ void clearInMemoryDexFiles() {
     g_inMemoryDexFiles.clear();
 }
 
-void poisonInMemoryDexHeaders() {
-    static bool s_poisoned = false;
-    if (s_poisoned) {
-        return;
-    }
-    s_poisoned = true;
+static std::vector<std::array<uint8_t, 24>> g_dexPoisonTokens;
 
-    uint64_t state = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&s_poisoned))
-                     ^ static_cast<uint64_t>(time(nullptr));
+static uint64_t poisonState(uint64_t seed) {
+    for (int i = 0; i < 4; i++) {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+    }
+    return seed;
+}
+
+bool refreshInMemoryDexPoison() {
+    static std::mutex poisonMutex;
+    std::lock_guard<std::mutex> guard(poisonMutex);
+    const bool verify = !g_dexPoisonTokens.empty();
+    if (verify && g_dexPoisonTokens.size() != g_inMemoryDexFiles.size()) {
+        return false;
+    }
+
+    uint64_t state = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&g_dexPoisonTokens))
+                     ^ static_cast<uint64_t>(time(nullptr)) ^ 0x9e3779b97f4a7c15ULL;
+    size_t index = 0;
     for (auto &item: g_inMemoryDexFiles) {
         uint8_t *data = item.first;
         const size_t size = item.second;
         if (data == nullptr || size < 32 || memcmp(data, "dex\n", 4) != 0) {
+            index++;
             continue;
         }
-        // checksum (8..11) and SHA-1 signature (12..31) are only validated when
-        // ART opens the DEX; classes already loaded keep working from the same buffer.
-        for (size_t i = 8; i < 32; i++) {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            data[i] = static_cast<uint8_t>(state);
+        if (verify && memcmp(data + 8, g_dexPoisonTokens[index].data(), 24) != 0) {
+            DLOGE("in-memory DEX header was modified after loading");
+            return false;
         }
+        if (!verify) {
+            g_dexPoisonTokens.emplace_back();
+        }
+        for (size_t i = 0; i < 24; i++) {
+            state = poisonState(state);
+            g_dexPoisonTokens[index][i] = static_cast<uint8_t>(state);
+        }
+        memcpy(data + 8, g_dexPoisonTokens[index].data(), 24);
+        index++;
     }
-    DLOGI("invalidated in-memory DEX headers after loading");
+    if (!verify) {
+        DLOGI("invalidated in-memory DEX headers after loading");
+    }
+    return true;
+}
+
+static uint32_t dexAdler32(const uint8_t *data, size_t size) {
+    uint32_t a = 1;
+    uint32_t b = 0;
+    for (size_t i = 0; i < size; i++) {
+        a = (a + data[i]) % 65521u;
+        b = (b + a) % 65521u;
+    }
+    return (b << 16u) | a;
+}
+
+static void writeLe32(uint8_t *out, uint32_t value) {
+    out[0] = static_cast<uint8_t>(value);
+    out[1] = static_cast<uint8_t>(value >> 8u);
+    out[2] = static_cast<uint8_t>(value >> 16u);
+    out[3] = static_cast<uint8_t>(value >> 24u);
+}
+
+void poisonInMemoryDexHeaders() {
+    (void) refreshInMemoryDexPoison();
+}
+
+void installDexDecoys() {
+    static std::vector<std::vector<uint8_t>> decoys;
+    if (!decoys.empty()) {
+        return;
+    }
+
+    uint64_t state = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&decoys))
+                     ^ static_cast<uint64_t>(time(nullptr)) ^ 0xd1b54a32d192ed03ULL;
+    for (int n = 0; n < 6; n++) {
+        state = poisonState(state);
+        const size_t size = 32768u + (state % 65536u);
+        std::vector<uint8_t> fake(size);
+        for (size_t i = 0; i < size; i++) {
+            state = poisonState(state);
+            fake[i] = static_cast<uint8_t>(state);
+        }
+        memcpy(fake.data(), "dex\n035\0", 8);
+        writeLe32(fake.data() + 32, static_cast<uint32_t>(size));
+        writeLe32(fake.data() + 36, 0x70u);
+        writeLe32(fake.data() + 40, 0x12345678u);
+        writeLe32(fake.data() + 96, 1u + static_cast<uint32_t>(state % 32u));
+        writeLe32(fake.data() + 100, 0x70u);
+        writeLe32(fake.data() + 104, static_cast<uint32_t>(size - 0x70u));
+        writeLe32(fake.data() + 108, 0x70u);
+        writeLe32(fake.data() + 8, dexAdler32(fake.data() + 12, size - 12));
+        decoys.push_back(std::move(fake));
+    }
+    DLOGI("installed %zu decoy DEX buffers", decoys.size());
 }
 
 static int classes_dex_index(const char *filename) {

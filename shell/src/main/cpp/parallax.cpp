@@ -228,6 +228,7 @@ PARALLAX_ENCRYPT void combineDexElements(JNIEnv *env, jclass klass, jobject targ
 #ifndef DEBUG
     junkCodeDexProtect(env);
     poisonInMemoryDexHeaders();
+    installDexDecoys();
 #endif
     DLOGD("success");
 }

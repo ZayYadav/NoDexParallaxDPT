@@ -82,6 +82,8 @@ void clearInMemoryDexFiles();
  * checksum/SHA-1 header.
  */
 void poisonInMemoryDexHeaders();
+bool refreshInMemoryDexPoison();
+void installDexDecoys();
 
 std::optional<std::tuple<uint8_t*, size_t>> read_zip_file_entry(void* zip_addr, off_t zip_size, const char* entry_name);
 
