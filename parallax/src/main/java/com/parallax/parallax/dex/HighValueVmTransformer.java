@@ -15,6 +15,7 @@ import com.android.tools.smali.dexlib2.iface.instruction.OffsetInstruction;
 import com.android.tools.smali.dexlib2.iface.instruction.OneRegisterInstruction;
 import com.android.tools.smali.dexlib2.iface.instruction.ThreeRegisterInstruction;
 import com.android.tools.smali.dexlib2.iface.instruction.TwoRegisterInstruction;
+import com.android.tools.smali.dexlib2.iface.instruction.WideLiteralInstruction;
 import com.android.tools.smali.dexlib2.immutable.ImmutableClassDef;
 import com.android.tools.smali.dexlib2.immutable.ImmutableDexFile;
 import com.android.tools.smali.dexlib2.immutable.ImmutableMethod;
@@ -23,6 +24,7 @@ import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstructio
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction11x;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction31i;
 import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction35c;
+import com.android.tools.smali.dexlib2.immutable.instruction.ImmutableInstruction3rc;
 import com.android.tools.smali.dexlib2.immutable.reference.ImmutableMethodReference;
 import com.parallax.parallax.Parallax;
 import com.parallax.parallax.util.CryptoUtils;
@@ -54,8 +56,8 @@ import java.util.regex.Pattern;
  * silently falling back to ordinary DEX restoration.
  */
 public final class HighValueVmTransformer {
-    private static final byte[] ENVELOPE_MAGIC = {'P', 'V', 'M', '1'};
-    private static final byte[] RAW_MAGIC = {'P', 'V', 'R', '1'};
+    private static final byte[] ENVELOPE_MAGIC = {'P', 'V', 'M', '2'};
+    private static final byte[] RAW_MAGIC = {'P', 'V', 'R', '2'};
     private static final String KEY_LABEL = "Parallax/highvalue/vm/encryption/v1/";
     private static final String AAD_PREFIX = "Parallax/highvalue/vm/payload/v1/";
     private static final int NONCE_SIZE = 12;
@@ -107,6 +109,25 @@ public final class HighValueVmTransformer {
     public static final int OP_IF_LE = 52;
     public static final int OP_RETURN = 60;
     public static final int OP_RETURN_VOID = 61;
+    public static final int OP_CONST_WIDE = 62;
+    public static final int OP_MOVE_WIDE = 63;
+    public static final int OP_ADD_LONG = 64;
+    public static final int OP_SUB_LONG = 65;
+    public static final int OP_MUL_LONG = 66;
+    public static final int OP_DIV_LONG = 67;
+    public static final int OP_REM_LONG = 68;
+    public static final int OP_AND_LONG = 69;
+    public static final int OP_OR_LONG = 70;
+    public static final int OP_XOR_LONG = 71;
+    public static final int OP_SHL_LONG = 72;
+    public static final int OP_SHR_LONG = 73;
+    public static final int OP_USHR_LONG = 74;
+    public static final int OP_NEG_LONG = 75;
+    public static final int OP_NOT_LONG = 76;
+    public static final int OP_CMP_LONG = 77;
+    public static final int OP_INT_TO_LONG = 78;
+    public static final int OP_LONG_TO_INT = 79;
+    public static final int OP_RETURN_LONG = 80;
 
     private HighValueVmTransformer() {}
 
@@ -146,12 +167,25 @@ public final class HighValueVmTransformer {
     }
 
     public static final class Program {
-        final int id, registerCount, parameterCount;
+        static final int RETURN_VOID = 0;
+        static final int RETURN_INT = 1;
+        static final int RETURN_LONG = 2;
+
+        final int id, registerCount, parameterCount, parameterRegisters, parameterTypes, returnType;
         final boolean returnsValue;
         final List<VmOp> ops;
-        Program(int id, int registerCount, int parameterCount, boolean returnsValue, List<VmOp> ops) {
+        Program(int id, int registerCount, int parameterCount, int parameterRegisters,
+                int parameterTypes, int returnType, List<VmOp> ops) {
             this.id = id; this.registerCount = registerCount; this.parameterCount = parameterCount;
-            this.returnsValue = returnsValue; this.ops = ops;
+            this.parameterRegisters = parameterRegisters; this.parameterTypes = parameterTypes;
+            this.returnType = returnType; this.returnsValue = returnType != RETURN_VOID;
+            this.ops = ops;
+        }
+
+        Program(int id, int registerCount, int parameterCount, boolean returnsValue,
+                List<VmOp> ops) {
+            this(id, registerCount, parameterCount, parameterCount, 0,
+                    returnsValue ? RETURN_INT : RETURN_VOID, ops);
         }
     }
 
@@ -256,7 +290,9 @@ public final class HighValueVmTransformer {
                 out.writeInt(p.id);
                 out.writeShort(p.registerCount);
                 out.writeByte(p.parameterCount);
-                out.writeByte(p.returnsValue ? 1 : 0);
+                out.writeByte(p.parameterRegisters);
+                out.writeByte(p.parameterTypes);
+                out.writeByte(p.returnType);
                 out.writeInt(p.ops.size());
                 for (VmOp op : p.ops) {
                     out.writeByte(op.opcode); out.writeByte(op.a); out.writeByte(op.b); out.writeByte(op.c);
@@ -281,20 +317,42 @@ public final class HighValueVmTransformer {
                 || "<init>".equals(method.getName()) || "<clinit>".equals(method.getName())) {
             throw unsupported(signature, "native/abstract/constructor methods are not eligible");
         }
-        if (method.getParameterTypes().size() > 4) throw unsupported(signature, "maximum four int parameters");
-        for (CharSequence type : method.getParameterTypes()) {
-            if (!"I".contentEquals(type)) throw unsupported(signature, "v1 accepts only int parameters");
+        if (method.getParameterTypes().size() > 4) throw unsupported(signature, "maximum four parameters");
+
+        int parameterRegisters = 0;
+        int parameterTypes = 0;
+        char parameterType = 0;
+        for (int i = 0; i < method.getParameterTypes().size(); i++) {
+            String type = method.getParameterTypes().get(i).toString();
+            char kind;
+            int width;
+            if ("I".equals(type)) { kind = 'I'; width = 1; }
+            else if ("J".equals(type)) { kind = 'J'; width = 2; }
+            else throw unsupported(signature, "v2 accepts only int or long parameters");
+            if (parameterType == 0) parameterType = kind;
+            else if (parameterType != kind) throw unsupported(signature, "v2 requires homogeneous parameter types");
+            parameterRegisters += width;
+            parameterTypes |= (kind == 'J' ? 1 : 0) << (i * 2);
         }
-        boolean returnsValue = "I".equals(method.getReturnType());
-        if (!returnsValue && !"V".equals(method.getReturnType())) {
-            throw unsupported(signature, "v1 return type must be int or void");
+
+        String returnTypeName = method.getReturnType().toString();
+        int returnType;
+        if ("V".equals(returnTypeName)) returnType = Program.RETURN_VOID;
+        else if ("I".equals(returnTypeName)) returnType = Program.RETURN_INT;
+        else if ("J".equals(returnTypeName)) returnType = Program.RETURN_LONG;
+        else throw unsupported(signature, "v2 return type must be int, long or void");
+        if (returnType == Program.RETURN_LONG && parameterType == 'I') {
+            throw unsupported(signature, "v2 long return requires long or no parameters");
+        }
+        if (parameterType == 'J' && returnType == Program.RETURN_INT) {
+            throw unsupported(signature, "v2 long parameters require long or void return");
         }
 
         MethodImplementation impl = method.getImplementation();
         if (impl == null) throw unsupported(signature, "method has no implementation");
         if (!impl.getTryBlocks().isEmpty()) throw unsupported(signature, "try/catch is not supported");
         int registerCount = impl.getRegisterCount();
-        if (registerCount <= 0 || registerCount > 255 || registerCount < method.getParameterTypes().size()) {
+        if (registerCount <= 0 || registerCount > 255 || registerCount < parameterRegisters) {
             throw unsupported(signature, "register layout outside VM limits");
         }
 
@@ -312,7 +370,8 @@ public final class HighValueVmTransformer {
             ops.add(translate(signature, i, address, addressToIndex));
             address += i.getCodeUnits();
         }
-        return new Program(methodId, registerCount, method.getParameterTypes().size(), returnsValue, ops);
+        return new Program(methodId, registerCount, method.getParameterTypes().size(),
+                parameterRegisters, parameterTypes, returnType, ops);
     }
 
     private static IOException unsupported(String signature, String why) {
@@ -334,8 +393,53 @@ public final class HighValueVmTransformer {
             case NOP: return v(OP_NOP, 0, 0, 0, 0, 0);
             case CONST_4: case CONST_16: case CONST: case CONST_HIGH16:
                 return v(OP_CONST, a(i), 0, 0, lit(i), 0);
+            case CONST_WIDE_16: {
+                long value = (short) ((NarrowLiteralInstruction) i).getNarrowLiteral();
+                return v(OP_CONST_WIDE, a(i), 0, 0, (int) value, (int) (value >>> 32));
+            }
+            case CONST_WIDE_32: {
+                long value = ((NarrowLiteralInstruction) i).getNarrowLiteral();
+                return v(OP_CONST_WIDE, a(i), 0, 0, (int) value, (int) (value >>> 32));
+            }
+            case CONST_WIDE: {
+                long value = ((WideLiteralInstruction) i).getWideLiteral();
+                return v(OP_CONST_WIDE, a(i), 0, 0, (int) value, (int) (value >>> 32));
+            }
+            case CONST_WIDE_HIGH16: {
+                long value = ((long) ((NarrowLiteralInstruction) i).getNarrowLiteral()) << 48;
+                return v(OP_CONST_WIDE, a(i), 0, 0, (int) value, (int) (value >>> 32));
+            }
             case MOVE: case MOVE_FROM16: case MOVE_16:
                 return v(OP_MOVE, a(i), b(i), 0, 0, 0);
+            case MOVE_WIDE: case MOVE_WIDE_FROM16: case MOVE_WIDE_16:
+                return v(OP_MOVE_WIDE, a(i), b(i), 0, 0, 0);
+            case NEG_LONG: return v(OP_NEG_LONG, a(i), b(i), 0, 0, 0);
+            case NOT_LONG: return v(OP_NOT_LONG, a(i), b(i), 0, 0, 0);
+            case INT_TO_LONG: return v(OP_INT_TO_LONG, a(i), b(i), 0, 0, 0);
+            case LONG_TO_INT: return v(OP_LONG_TO_INT, a(i), b(i), 0, 0, 0);
+            case CMP_LONG: return three(OP_CMP_LONG, i);
+            case ADD_LONG: return three(OP_ADD_LONG, i);
+            case SUB_LONG: return three(OP_SUB_LONG, i);
+            case MUL_LONG: return three(OP_MUL_LONG, i);
+            case DIV_LONG: return three(OP_DIV_LONG, i);
+            case REM_LONG: return three(OP_REM_LONG, i);
+            case AND_LONG: return three(OP_AND_LONG, i);
+            case OR_LONG: return three(OP_OR_LONG, i);
+            case XOR_LONG: return three(OP_XOR_LONG, i);
+            case SHL_LONG: return three(OP_SHL_LONG, i);
+            case SHR_LONG: return three(OP_SHR_LONG, i);
+            case USHR_LONG: return three(OP_USHR_LONG, i);
+            case ADD_LONG_2ADDR: return two(OP_ADD_LONG, i);
+            case SUB_LONG_2ADDR: return two(OP_SUB_LONG, i);
+            case MUL_LONG_2ADDR: return two(OP_MUL_LONG, i);
+            case DIV_LONG_2ADDR: return two(OP_DIV_LONG, i);
+            case REM_LONG_2ADDR: return two(OP_REM_LONG, i);
+            case AND_LONG_2ADDR: return two(OP_AND_LONG, i);
+            case OR_LONG_2ADDR: return two(OP_OR_LONG, i);
+            case XOR_LONG_2ADDR: return two(OP_XOR_LONG, i);
+            case SHL_LONG_2ADDR: return two(OP_SHL_LONG, i);
+            case SHR_LONG_2ADDR: return two(OP_SHR_LONG, i);
+            case USHR_LONG_2ADDR: return two(OP_USHR_LONG, i);
             case NEG_INT: return v(OP_NEG, a(i), b(i), 0, 0, 0);
             case NOT_INT: return v(OP_NOT, a(i), b(i), 0, 0, 0);
             case INT_TO_BYTE: return v(OP_BYTE, a(i), b(i), 0, 0, 0);
@@ -379,6 +483,7 @@ public final class HighValueVmTransformer {
             case IF_GT: return twoBranch(OP_IF_GT, i, signature, address, targets);
             case IF_LE: return twoBranch(OP_IF_LE, i, signature, address, targets);
             case RETURN: return v(OP_RETURN, a(i), 0, 0, 0, 0);
+            case RETURN_WIDE: return v(OP_RETURN_LONG, a(i), 0, 0, 0, 0);
             case RETURN_VOID: return v(OP_RETURN_VOID, 0, 0, 0, 0, 0);
             default: throw unsupported(signature, "unsupported opcode " + op);
         }
@@ -413,20 +518,46 @@ public final class HighValueVmTransformer {
 
     private static Method rewriteAsTrampoline(Method method, int methodId, String bridgeClassSig) {
         int params = method.getParameterTypes().size();
-        boolean returnsValue = "I".equals(method.getReturnType());
+        String returnType = method.getReturnType().toString();
+        boolean wideMethod = false;
+        for (CharSequence type : method.getParameterTypes()) {
+            if ("J".contentEquals(type)) wideMethod = true;
+        }
+
+        int parameterRegisters = 0;
         List<String> bridgeParams = new ArrayList<>();
         bridgeParams.add("I");
-        for (int i = 0; i < params; i++) bridgeParams.add("I");
+        for (CharSequence type : method.getParameterTypes()) {
+            String value = type.toString();
+            parameterRegisters += "J".equals(value) ? 2 : 1;
+            bridgeParams.add(value);
+        }
+
+        String bridgeName;
+        if ("V".equals(returnType)) {
+            bridgeName = (wideMethod ? "hvjv" : "hvv") + params;
+        } else if ("J".equals(returnType)) {
+            bridgeName = "hvj" + params;
+        } else {
+            bridgeName = "hvi" + params;
+        }
         ImmutableMethodReference bridge = new ImmutableMethodReference(
-                bridgeClassSig, (returnsValue ? "hvi" : "hvv") + params,
-                bridgeParams, returnsValue ? "I" : "V");
+                bridgeClassSig, bridgeName, bridgeParams, returnType);
 
         List<Instruction> code = new ArrayList<>();
+        int frame = 1 + parameterRegisters * 2;
+        if ("J".equals(returnType) && frame < 2) frame = 2;
+        int incomingBase = 1 + parameterRegisters;
+        for (int i = 0; i < parameterRegisters; i++) {
+            code.add(new ImmutableInstruction11x(Opcode.MOVE, 1 + i, incomingBase + i));
+        }
         code.add(new ImmutableInstruction31i(Opcode.CONST, 0, methodId));
-        code.add(new ImmutableInstruction35c(Opcode.INVOKE_STATIC, params + 1,
-                0, params >= 1 ? 1 : 0, params >= 2 ? 2 : 0,
-                params >= 3 ? 3 : 0, params >= 4 ? 4 : 0, bridge));
-        if (returnsValue) {
+        code.add(new ImmutableInstruction3rc(Opcode.INVOKE_STATIC_RANGE, 0,
+                1 + parameterRegisters, bridge));
+        if ("J".equals(returnType)) {
+            code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_WIDE, 0));
+            code.add(new ImmutableInstruction11x(Opcode.RETURN_WIDE, 0));
+        } else if ("I".equals(returnType)) {
             code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT, 0));
             code.add(new ImmutableInstruction11x(Opcode.RETURN, 0));
         } else {
@@ -435,6 +566,6 @@ public final class HighValueVmTransformer {
         return new ImmutableMethod(method.getDefiningClass(), method.getName(), method.getParameters(),
                 method.getReturnType(), method.getAccessFlags(), method.getAnnotations(),
                 method.getHiddenApiRestrictions(),
-                new ImmutableMethodImplementation(params + 1, code, null, null));
+                new ImmutableMethodImplementation(frame, code, null, null));
     }
 }

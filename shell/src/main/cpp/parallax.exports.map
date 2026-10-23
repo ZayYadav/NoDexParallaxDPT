@@ -12,6 +12,16 @@
     Java_Parallax_Enc_CrackWarTeamMC_hvv2;
     Java_Parallax_Enc_CrackWarTeamMC_hvv3;
     Java_Parallax_Enc_CrackWarTeamMC_hvv4;
+    Java_Parallax_Enc_CrackWarTeamMC_hvj0;
+    Java_Parallax_Enc_CrackWarTeamMC_hvj1;
+    Java_Parallax_Enc_CrackWarTeamMC_hvj2;
+    Java_Parallax_Enc_CrackWarTeamMC_hvj3;
+    Java_Parallax_Enc_CrackWarTeamMC_hvj4;
+    Java_Parallax_Enc_CrackWarTeamMC_hvjv0;
+    Java_Parallax_Enc_CrackWarTeamMC_hvjv1;
+    Java_Parallax_Enc_CrackWarTeamMC_hvjv2;
+    Java_Parallax_Enc_CrackWarTeamMC_hvjv3;
+    Java_Parallax_Enc_CrackWarTeamMC_hvjv4;
   local:
     *;
 };

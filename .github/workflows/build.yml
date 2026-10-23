@@ -252,7 +252,7 @@ jobs:
             fi
 
             EXPORTS=$("$NM" -D --defined-only "$SO" | awk '{print $3}' | sed '/^$/d' | sort -u)
-            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|PARALLAX_UNKNOWN_DATA|Java_Parallax_Enc_CrackWarTeamMC_(hvi|hvv)[0-4])$' || true)
+            UNEXPECTED=$(printf '%s\n' "$EXPORTS" | grep -Ev '^(JNI_OnLoad|PARALLAX_UNKNOWN_DATA|Java_Parallax_Enc_CrackWarTeamMC_(hvi|hvv|hvj|hvjv)[0-4])$' || true)
             if [ -n "$UNEXPECTED" ]; then
               echo "Unexpected exported native symbols in $SO:" >&2
               printf '%s\n' "$UNEXPECTED" >&2
@@ -266,7 +266,7 @@ jobs:
               echo "Build-time native key patch symbol is not exported in $SO" >&2
               exit 1
             }
-            for kind in hvi hvv; do
+            for kind in hvi hvv hvj hvjv; do
               for n in $(seq 0 4); do
                 printf '%s\n' "$EXPORTS" | grep -qx "Java_Parallax_Enc_CrackWarTeamMC_${kind}${n}" || {
                   echo "Missing CrackWarTeamMC JNI export: ${kind}${n}" >&2

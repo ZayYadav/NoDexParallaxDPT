@@ -70,15 +70,17 @@ final class AutomaticVmSelector {
         final int branchCount;
         final int arithmeticCount;
         final boolean sensitiveName;
+        final char valueType;
 
         Candidate(String signature, int score, int instructionCount, int branchCount,
-                  int arithmeticCount, boolean sensitiveName) {
+                  int arithmeticCount, boolean sensitiveName, char valueType) {
             this.signature = signature;
             this.score = score;
             this.instructionCount = instructionCount;
             this.branchCount = branchCount;
             this.arithmeticCount = arithmeticCount;
             this.sensitiveName = sensitiveName;
+            this.valueType = valueType;
         }
     }
 
@@ -118,7 +120,8 @@ final class AutomaticVmSelector {
         int selected = Math.min(candidates.size(), maxTotal);
         for (int i = 0; i < selected; i++) {
             Candidate candidate = candidates.get(i);
-            Tier tier = classify(candidate.instructionCount, candidate.branchCount,
+            Tier tier = candidate.valueType == 'J' ? Tier.VM
+                    : classify(candidate.instructionCount, candidate.branchCount,
                     candidate.arithmeticCount, candidate.sensitiveName);
             if (tier == Tier.VM4 && vm4.size() < maxVm4) {
                 vm4.add(new HighValueVmTransformer.Rule(candidate.signature));
@@ -146,15 +149,28 @@ final class AutomaticVmSelector {
         if ((flags & (AccessFlags.NATIVE.getValue() | AccessFlags.ABSTRACT.getValue())) != 0) return null;
         if ("<init>".equals(method.getName()) || "<clinit>".equals(method.getName())) return null;
         if (method.getParameterTypes().size() > 4) return null;
+
+        char valueType = 0;
+        int parameterRegisters = 0;
         for (CharSequence type : method.getParameterTypes()) {
-            if (!"I".contentEquals(type)) return null;
+            char kind;
+            if ("I".contentEquals(type)) kind = 'I';
+            else if ("J".contentEquals(type)) kind = 'J';
+            else return null;
+            if (valueType == 0) valueType = kind;
+            else if (valueType != kind) return null;
+            parameterRegisters += kind == 'J' ? 2 : 1;
         }
-        if (!"I".equals(method.getReturnType()) && !"V".equals(method.getReturnType())) return null;
+        String returnType = method.getReturnType().toString();
+        if (!"I".equals(returnType) && !"J".equals(returnType) && !"V".equals(returnType)) return null;
+        if (valueType == 0) valueType = "J".equals(returnType) ? 'J' : 'I';
+        if ("J".equals(returnType) && valueType != 'J') return null;
+        if (valueType == 'J' && "I".equals(returnType)) return null;
 
         MethodImplementation impl = method.getImplementation();
         if (impl == null || !impl.getTryBlocks().isEmpty()) return null;
         int registers = impl.getRegisterCount();
-        if (registers <= 0 || registers > 255 || registers < method.getParameterTypes().size()) return null;
+        if (registers <= 0 || registers > 255 || registers < parameterRegisters) return null;
 
         int instructionCount = 0;
         int branchCount = 0;
@@ -173,7 +189,8 @@ final class AutomaticVmSelector {
         String signature = signatureOf(method);
         boolean sensitive = hasSensitiveName(method);
         int score = instructionCount + branchCount * 8 + arithmeticCount * 2 + (sensitive ? 24 : 0);
-        return new Candidate(signature, score, instructionCount, branchCount, arithmeticCount, sensitive);
+        return new Candidate(signature, score, instructionCount, branchCount,
+                arithmeticCount, sensitive, valueType);
     }
 
     private static boolean hasSensitiveName(Method method) {
@@ -228,6 +245,13 @@ final class AutomaticVmSelector {
             case REM_INT_LIT8: case REM_INT_LIT16: case AND_INT_LIT8: case AND_INT_LIT16:
             case OR_INT_LIT8: case OR_INT_LIT16: case XOR_INT_LIT8: case XOR_INT_LIT16:
             case SHL_INT_LIT8: case SHR_INT_LIT8: case USHR_INT_LIT8:
+            case NEG_LONG: case NOT_LONG: case CMP_LONG:
+            case ADD_LONG: case SUB_LONG: case MUL_LONG: case DIV_LONG: case REM_LONG:
+            case AND_LONG: case OR_LONG: case XOR_LONG: case SHL_LONG: case SHR_LONG: case USHR_LONG:
+            case ADD_LONG_2ADDR: case SUB_LONG_2ADDR: case MUL_LONG_2ADDR: case DIV_LONG_2ADDR:
+            case REM_LONG_2ADDR: case AND_LONG_2ADDR: case OR_LONG_2ADDR: case XOR_LONG_2ADDR:
+            case SHL_LONG_2ADDR: case SHR_LONG_2ADDR: case USHR_LONG_2ADDR:
+            case INT_TO_LONG: case LONG_TO_INT:
                 return true;
             default:
                 return false;
@@ -238,8 +262,16 @@ final class AutomaticVmSelector {
         switch (op) {
             case NOP:
             case CONST_4: case CONST_16: case CONST: case CONST_HIGH16:
+            case CONST_WIDE_16: case CONST_WIDE_32: case CONST_WIDE: case CONST_WIDE_HIGH16:
             case MOVE: case MOVE_FROM16: case MOVE_16:
+            case MOVE_WIDE: case MOVE_WIDE_FROM16: case MOVE_WIDE_16:
             case NEG_INT: case NOT_INT: case INT_TO_BYTE: case INT_TO_CHAR: case INT_TO_SHORT:
+            case NEG_LONG: case NOT_LONG: case INT_TO_LONG: case LONG_TO_INT: case CMP_LONG:
+            case ADD_LONG: case SUB_LONG: case MUL_LONG: case DIV_LONG: case REM_LONG:
+            case AND_LONG: case OR_LONG: case XOR_LONG: case SHL_LONG: case SHR_LONG: case USHR_LONG:
+            case ADD_LONG_2ADDR: case SUB_LONG_2ADDR: case MUL_LONG_2ADDR: case DIV_LONG_2ADDR:
+            case REM_LONG_2ADDR: case AND_LONG_2ADDR: case OR_LONG_2ADDR: case XOR_LONG_2ADDR:
+            case SHL_LONG_2ADDR: case SHR_LONG_2ADDR: case USHR_LONG_2ADDR:
             case ADD_INT: case SUB_INT: case MUL_INT: case DIV_INT: case REM_INT:
             case AND_INT: case OR_INT: case XOR_INT: case SHL_INT: case SHR_INT: case USHR_INT:
             case ADD_INT_2ADDR: case SUB_INT_2ADDR: case MUL_INT_2ADDR: case DIV_INT_2ADDR:
@@ -253,7 +285,7 @@ final class AutomaticVmSelector {
             case GOTO: case GOTO_16: case GOTO_32:
             case IF_EQZ: case IF_NEZ: case IF_LTZ: case IF_GEZ: case IF_GTZ: case IF_LEZ:
             case IF_EQ: case IF_NE: case IF_LT: case IF_GE: case IF_GT: case IF_LE:
-            case RETURN: case RETURN_VOID:
+            case RETURN: case RETURN_WIDE: case RETURN_VOID:
                 return true;
             default:
                 return false;

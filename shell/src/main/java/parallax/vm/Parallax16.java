@@ -19,4 +19,16 @@ public final class Parallax16 {
     public static native void hvv2(int methodId, int a0, int a1);
     public static native void hvv3(int methodId, int a0, int a1, int a2);
     public static native void hvv4(int methodId, int a0, int a1, int a2, int a3);
+
+    public static native long hvj0(int methodId);
+    public static native long hvj1(int methodId, long a0);
+    public static native long hvj2(int methodId, long a0, long a1);
+    public static native long hvj3(int methodId, long a0, long a1, long a2);
+    public static native long hvj4(int methodId, long a0, long a1, long a2, long a3);
+
+    public static native void hvjv0(int methodId);
+    public static native void hvjv1(int methodId, long a0);
+    public static native void hvjv2(int methodId, long a0, long a1);
+    public static native void hvjv3(int methodId, long a0, long a1, long a2);
+    public static native void hvjv4(int methodId, long a0, long a1, long a2, long a3);
 }

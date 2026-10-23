@@ -1,7 +1,7 @@
 #include "parallax_util.h"
 #include "parallax_vm.h"
 
-// Compile the legacy PVM1 interpreter as a private runtime. Its payload lives beside the
+// Compile the legacy PVM2 interpreter as a private runtime. Its payload lives beside the
 // PVM4 payload under a different reserved asset name so both tiers can coexist in one APK.
 static std::optional<std::tuple<uint8_t*, size_t>> readClassicVmAsset(
         void *zipAddr, off_t zipSize, const char *entryName);

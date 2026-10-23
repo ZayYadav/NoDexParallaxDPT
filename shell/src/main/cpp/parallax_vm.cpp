@@ -32,7 +32,18 @@ enum : uint8_t {
     OP_GOTO = 40, OP_IF_EQZ = 41, OP_IF_NEZ = 42, OP_IF_LTZ = 43,
     OP_IF_GEZ = 44, OP_IF_GTZ = 45, OP_IF_LEZ = 46, OP_IF_EQ = 47,
     OP_IF_NE = 48, OP_IF_LT = 49, OP_IF_GE = 50, OP_IF_GT = 51, OP_IF_LE = 52,
-    OP_RETURN = 60, OP_RETURN_VOID = 61
+    OP_RETURN = 60, OP_RETURN_VOID = 61,
+    OP_CONST_WIDE = 62, OP_MOVE_WIDE = 63,
+    OP_ADD_LONG = 64, OP_SUB_LONG = 65, OP_MUL_LONG = 66, OP_DIV_LONG = 67,
+    OP_REM_LONG = 68, OP_AND_LONG = 69, OP_OR_LONG = 70, OP_XOR_LONG = 71,
+    OP_SHL_LONG = 72, OP_SHR_LONG = 73, OP_USHR_LONG = 74,
+    OP_NEG_LONG = 75, OP_NOT_LONG = 76, OP_CMP_LONG = 77,
+    OP_INT_TO_LONG = 78, OP_LONG_TO_INT = 79, OP_RETURN_LONG = 80
+};
+
+enum : uint8_t {
+    RET_VOID = 0, RET_INT = 1, RET_LONG = 2,
+    PARAM_INT = 0, PARAM_LONG = 1
 };
 
 constexpr size_t kEnvelopeHeader = 20; // magic + raw length + 12-byte nonce
@@ -49,6 +60,9 @@ struct VmOp {
 struct VmProgram {
     uint16_t registers = 0;
     uint8_t parameters = 0;
+    uint8_t parameterRegisters = 0;
+    uint8_t parameterTypes = 0;
+    uint8_t returnType = RET_VOID;
     bool returnsValue = false;
     std::vector<VmOp> ops;
 };
@@ -77,6 +91,10 @@ static bool regOk(const VmProgram &p, uint8_t r) {
     return r < p.registers;
 }
 
+static bool wideRegOk(const VmProgram &p, uint8_t r) {
+    return static_cast<uint16_t>(r) + 1u < p.registers;
+}
+
 static bool validate(const VmProgram &p, const VmOp &op) {
     switch (op.opcode) {
         case OP_NOP: case OP_GOTO: case OP_RETURN_VOID:
@@ -97,6 +115,25 @@ static bool validate(const VmProgram &p, const VmOp &op) {
         case OP_AND: case OP_OR: case OP_XOR: case OP_SHL: case OP_SHR: case OP_USHR:
             if (!regOk(p, op.a) || !regOk(p, op.b) || !regOk(p, op.c)) return false;
             break;
+        case OP_CONST_WIDE: case OP_MOVE_WIDE: case OP_NEG_LONG: case OP_NOT_LONG:
+        case OP_RETURN_LONG:
+            if (!wideRegOk(p, op.a)) return false;
+            if (op.opcode != OP_CONST_WIDE && !wideRegOk(p, op.b)) return false;
+            break;
+        case OP_INT_TO_LONG:
+            if (!wideRegOk(p, op.a) || !regOk(p, op.b)) return false;
+            break;
+        case OP_LONG_TO_INT:
+            if (!regOk(p, op.a) || !wideRegOk(p, op.b)) return false;
+            break;
+        case OP_CMP_LONG:
+            if (!regOk(p, op.a) || !wideRegOk(p, op.b) || !wideRegOk(p, op.c)) return false;
+            break;
+        case OP_ADD_LONG: case OP_SUB_LONG: case OP_MUL_LONG: case OP_DIV_LONG:
+        case OP_REM_LONG: case OP_AND_LONG: case OP_OR_LONG: case OP_XOR_LONG:
+        case OP_SHL_LONG: case OP_SHR_LONG: case OP_USHR_LONG:
+            if (!wideRegOk(p, op.a) || !wideRegOk(p, op.b) || !wideRegOk(p, op.c)) return false;
+            break;
         default:
             return false;
     }
@@ -106,7 +143,7 @@ static bool validate(const VmProgram &p, const VmOp &op) {
 }
 
 static bool parsePayload(const std::vector<uint8_t> &raw) {
-    if (raw.size() < 8 || memcmp(raw.data(), "PVR1", 4) != 0) return false;
+    if (raw.size() < 8 || memcmp(raw.data(), "PVR2", 4) != 0) return false;
     size_t cursor = 4;
     uint32_t count = be32(raw.data() + cursor); cursor += 4;
     if (count == 0 || count > kMaxPrograms) return false;
@@ -114,17 +151,28 @@ static bool parsePayload(const std::vector<uint8_t> &raw) {
     std::unordered_map<uint32_t, VmProgram> parsed;
     parsed.reserve(count);
     for (uint32_t n = 0; n < count; ++n) {
-        if (!hasBytes(cursor, 12, raw.size())) return false;
+        if (!hasBytes(cursor, 14, raw.size())) return false;
         uint32_t id = be32(raw.data() + cursor); cursor += 4;
         VmProgram p;
         p.registers = be16(raw.data() + cursor); cursor += 2;
         p.parameters = raw[cursor++];
-        uint8_t returnFlag = raw[cursor++];
+        p.parameterRegisters = raw[cursor++];
+        p.parameterTypes = raw[cursor++];
+        p.returnType = raw[cursor++];
         uint32_t opCount = be32(raw.data() + cursor); cursor += 4;
         if (id == 0 || p.registers == 0 || p.registers > 255 || p.parameters > 4
-                || p.parameters > p.registers || returnFlag > 1 || opCount == 0
-                || opCount > kMaxOpsPerProgram || parsed.find(id) != parsed.end()) return false;
-        p.returnsValue = returnFlag != 0;
+                || p.parameterRegisters > p.registers || p.returnType > RET_LONG
+                || opCount == 0 || opCount > kMaxOpsPerProgram
+                || parsed.find(id) != parsed.end()) return false;
+        uint32_t width = 0;
+        for (uint32_t i = 0; i < p.parameters; ++i) {
+            uint8_t kind = (p.parameterTypes >> (i * 2u)) & 0x3u;
+            if (kind == PARAM_INT) width += 1;
+            else if (kind == PARAM_LONG) width += 2;
+            else return false;
+        }
+        if (width != p.parameterRegisters) return false;
+        p.returnsValue = p.returnType != RET_VOID;
         if (!hasBytes(cursor, static_cast<size_t>(opCount) * 12u, raw.size())) return false;
         p.ops.reserve(opCount);
         for (uint32_t i = 0; i < opCount; ++i) {
@@ -153,8 +201,19 @@ static bool arithmeticException(JNIEnv *env) {
     return false;
 }
 
-static bool run(JNIEnv *env, uint32_t id, const jint *args, size_t argc,
-                bool expectValue, jint *out) {
+static uint64_t getLong(const std::vector<int32_t> &r, uint8_t reg) {
+    uint64_t low = static_cast<uint32_t>(r[reg]);
+    uint64_t high = static_cast<uint32_t>(r[static_cast<size_t>(reg) + 1]);
+    return low | (high << 32u);
+}
+
+static void setLong(std::vector<int32_t> &r, uint8_t reg, uint64_t value) {
+    r[reg] = static_cast<int32_t>(static_cast<uint32_t>(value));
+    r[static_cast<size_t>(reg) + 1] = static_cast<int32_t>(static_cast<uint32_t>(value >> 32u));
+}
+
+static bool run(JNIEnv *env, uint32_t id, const uint64_t *args, size_t argc,
+                bool expectValue, uint64_t *out) {
     loadHighValueVm(env);
     if (!g_payload_present) {
         reportSecurityRisk(PARALLAX_SECURITY_RUNTIME_TAMPER_BIT);
@@ -172,8 +231,19 @@ static bool run(JNIEnv *env, uint32_t id, const jint *args, size_t argc,
     }
 
     std::vector<int32_t> r(p.registers, 0);
-    size_t parameterBase = p.registers - p.parameters;
-    for (size_t i = 0; i < argc; ++i) r[parameterBase + i] = static_cast<int32_t>(args[i]);
+    size_t parameterBase = p.registers - p.parameterRegisters;
+    size_t parameterOffset = 0;
+    for (size_t i = 0; i < argc; ++i) {
+        uint8_t kind = (p.parameterTypes >> (i * 2u)) & 0x3u;
+        if (kind == PARAM_LONG) {
+            setLong(r, static_cast<uint8_t>(parameterBase + parameterOffset), args[i]);
+            parameterOffset += 2;
+        } else {
+            r[parameterBase + parameterOffset] =
+                    static_cast<int32_t>(static_cast<uint32_t>(args[i]));
+            parameterOffset += 1;
+        }
+    }
 
     size_t pc = 0;
     size_t steps = 0;
@@ -233,6 +303,67 @@ static bool run(JNIEnv *env, uint32_t id, const jint *args, size_t argc,
             case OP_SHL_LIT: r[op.a] = static_cast<int32_t>(static_cast<uint32_t>(r[op.b]) << (op.imm & 31)); ++pc; break;
             case OP_SHR_LIT: r[op.a] = r[op.b] >> (op.imm & 31); ++pc; break;
             case OP_USHR_LIT: r[op.a] = static_cast<int32_t>(static_cast<uint32_t>(r[op.b]) >> (op.imm & 31)); ++pc; break;
+            case OP_CONST_WIDE:
+                setLong(r, op.a, static_cast<uint64_t>(static_cast<uint32_t>(op.imm))
+                        | (static_cast<uint64_t>(op.target) << 32u));
+                ++pc; break;
+            case OP_MOVE_WIDE: {
+                uint64_t value = getLong(r, op.b);
+                setLong(r, op.a, value);
+                ++pc; break;
+            }
+            case OP_NEG_LONG:
+                setLong(r, op.a, static_cast<uint64_t>(0) - getLong(r, op.b)); ++pc; break;
+            case OP_NOT_LONG:
+                setLong(r, op.a, ~getLong(r, op.b)); ++pc; break;
+            case OP_INT_TO_LONG:
+                setLong(r, op.a, static_cast<uint64_t>(static_cast<int64_t>(r[op.b]))); ++pc; break;
+            case OP_LONG_TO_INT:
+                r[op.a] = static_cast<int32_t>(static_cast<uint32_t>(getLong(r, op.b))); ++pc; break;
+            case OP_CMP_LONG: {
+                int64_t lhs = static_cast<int64_t>(getLong(r, op.b));
+                int64_t rhs = static_cast<int64_t>(getLong(r, op.c));
+                r[op.a] = (lhs > rhs) ? 1 : ((lhs < rhs) ? -1 : 0);
+                ++pc; break;
+            }
+            case OP_ADD_LONG:
+                setLong(r, op.a, getLong(r, op.b) + getLong(r, op.c)); ++pc; break;
+            case OP_SUB_LONG:
+                setLong(r, op.a, getLong(r, op.b) - getLong(r, op.c)); ++pc; break;
+            case OP_MUL_LONG:
+                setLong(r, op.a, getLong(r, op.b) * getLong(r, op.c)); ++pc; break;
+            case OP_DIV_LONG: {
+                int64_t rhs = static_cast<int64_t>(getLong(r, op.c));
+                if (rhs == 0) return arithmeticException(env);
+                int64_t lhs = static_cast<int64_t>(getLong(r, op.b));
+                if (lhs == std::numeric_limits<int64_t>::min() && rhs == -1) {
+                    setLong(r, op.a, static_cast<uint64_t>(lhs));
+                } else {
+                    setLong(r, op.a, static_cast<uint64_t>(lhs / rhs));
+                }
+                ++pc; break;
+            }
+            case OP_REM_LONG: {
+                int64_t rhs = static_cast<int64_t>(getLong(r, op.c));
+                if (rhs == 0) return arithmeticException(env);
+                int64_t lhs = static_cast<int64_t>(getLong(r, op.b));
+                setLong(r, op.a, (lhs == std::numeric_limits<int64_t>::min() && rhs == -1)
+                        ? 0 : static_cast<uint64_t>(lhs % rhs));
+                ++pc; break;
+            }
+            case OP_AND_LONG:
+                setLong(r, op.a, getLong(r, op.b) & getLong(r, op.c)); ++pc; break;
+            case OP_OR_LONG:
+                setLong(r, op.a, getLong(r, op.b) | getLong(r, op.c)); ++pc; break;
+            case OP_XOR_LONG:
+                setLong(r, op.a, getLong(r, op.b) ^ getLong(r, op.c)); ++pc; break;
+            case OP_SHL_LONG:
+                setLong(r, op.a, getLong(r, op.b) << (getLong(r, op.c) & 63u)); ++pc; break;
+            case OP_SHR_LONG:
+                setLong(r, op.a, static_cast<uint64_t>(static_cast<int64_t>(getLong(r, op.b))
+                        >> (getLong(r, op.c) & 63u))); ++pc; break;
+            case OP_USHR_LONG:
+                setLong(r, op.a, getLong(r, op.b) >> (getLong(r, op.c) & 63u)); ++pc; break;
             case OP_GOTO: pc = op.target; break;
             case OP_IF_EQZ: pc = r[op.a] == 0 ? op.target : pc + 1; break;
             case OP_IF_NEZ: pc = r[op.a] != 0 ? op.target : pc + 1; break;
@@ -248,7 +379,11 @@ static bool run(JNIEnv *env, uint32_t id, const jint *args, size_t argc,
             case OP_IF_LE: pc = r[op.a] <= r[op.b] ? op.target : pc + 1; break;
             case OP_RETURN:
                 if (!expectValue) return false;
-                if (out != nullptr) *out = static_cast<jint>(r[op.a]);
+                if (out != nullptr) *out = static_cast<uint32_t>(r[op.a]);
+                return true;
+            case OP_RETURN_LONG:
+                if (!expectValue) return false;
+                if (out != nullptr) *out = getLong(r, op.a);
                 return true;
             case OP_RETURN_VOID:
                 return !expectValue;
@@ -261,12 +396,19 @@ static bool run(JNIEnv *env, uint32_t id, const jint *args, size_t argc,
     return false;
 }
 
-static jint callInt(JNIEnv *env, jint id, const jint *args, size_t argc) {
-    jint result = 0;
-    return run(env, static_cast<uint32_t>(id), args, argc, true, &result) ? result : 0;
+static jint callInt(JNIEnv *env, jint id, const uint64_t *args, size_t argc) {
+    uint64_t result = 0;
+    return run(env, static_cast<uint32_t>(id), args, argc, true, &result)
+            ? static_cast<jint>(static_cast<uint32_t>(result)) : 0;
 }
 
-static void callVoid(JNIEnv *env, jint id, const jint *args, size_t argc) {
+static jlong callLong(JNIEnv *env, jint id, const uint64_t *args, size_t argc) {
+    uint64_t result = 0;
+    return run(env, static_cast<uint32_t>(id), args, argc, true, &result)
+            ? static_cast<jlong>(result) : 0;
+}
+
+static void callVoid(JNIEnv *env, jint id, const uint64_t *args, size_t argc) {
     (void) run(env, static_cast<uint32_t>(id), args, argc, false, nullptr);
 }
 
@@ -294,7 +436,7 @@ void loadHighValueVm(JNIEnv *env) {
     bool ok = false;
     do {
         if (entrySize <= kEnvelopeHeader + 16 || entrySize > kMaxVmPayload
-                || memcmp(entryData, "PVM1", 4) != 0) break;
+                || memcmp(entryData, "PVM2", 4) != 0) break;
         uint32_t rawSize = be32(entryData + 4);
         if (rawSize == 0 || rawSize > kMaxVmPayload) break;
 
@@ -323,12 +465,23 @@ void loadHighValueVm(JNIEnv *env) {
 }
 
 jint highValueVmI0(JNIEnv *env, jclass, jint id) { return callInt(env, id, nullptr, 0); }
-jint highValueVmI1(JNIEnv *env, jclass, jint id, jint a0) { const jint a[]{a0}; return callInt(env,id,a,1); }
-jint highValueVmI2(JNIEnv *env, jclass, jint id, jint a0, jint a1) { const jint a[]{a0,a1}; return callInt(env,id,a,2); }
-jint highValueVmI3(JNIEnv *env, jclass, jint id, jint a0, jint a1, jint a2) { const jint a[]{a0,a1,a2}; return callInt(env,id,a,3); }
-jint highValueVmI4(JNIEnv *env, jclass, jint id, jint a0, jint a1, jint a2, jint a3) { const jint a[]{a0,a1,a2,a3}; return callInt(env,id,a,4); }
+jint highValueVmI1(JNIEnv *env, jclass, jint id, jint a0) { const uint64_t a[]{(uint64_t)(uint32_t)a0}; return callInt(env,id,a,1); }
+jint highValueVmI2(JNIEnv *env, jclass, jint id, jint a0, jint a1) { const uint64_t a[]{(uint64_t)(uint32_t)a0,(uint64_t)(uint32_t)a1}; return callInt(env,id,a,2); }
+jint highValueVmI3(JNIEnv *env, jclass, jint id, jint a0, jint a1, jint a2) { const uint64_t a[]{(uint64_t)(uint32_t)a0,(uint64_t)(uint32_t)a1,(uint64_t)(uint32_t)a2}; return callInt(env,id,a,3); }
+jint highValueVmI4(JNIEnv *env, jclass, jint id, jint a0, jint a1, jint a2, jint a3) { const uint64_t a[]{(uint64_t)(uint32_t)a0,(uint64_t)(uint32_t)a1,(uint64_t)(uint32_t)a2,(uint64_t)(uint32_t)a3}; return callInt(env,id,a,4); }
 void highValueVmV0(JNIEnv *env, jclass, jint id) { callVoid(env,id,nullptr,0); }
-void highValueVmV1(JNIEnv *env, jclass, jint id, jint a0) { const jint a[]{a0}; callVoid(env,id,a,1); }
-void highValueVmV2(JNIEnv *env, jclass, jint id, jint a0, jint a1) { const jint a[]{a0,a1}; callVoid(env,id,a,2); }
-void highValueVmV3(JNIEnv *env, jclass, jint id, jint a0, jint a1, jint a2) { const jint a[]{a0,a1,a2}; callVoid(env,id,a,3); }
-void highValueVmV4(JNIEnv *env, jclass, jint id, jint a0, jint a1, jint a2, jint a3) { const jint a[]{a0,a1,a2,a3}; callVoid(env,id,a,4); }
+void highValueVmV1(JNIEnv *env, jclass, jint id, jint a0) { const uint64_t a[]{(uint64_t)(uint32_t)a0}; callVoid(env,id,a,1); }
+void highValueVmV2(JNIEnv *env, jclass, jint id, jint a0, jint a1) { const uint64_t a[]{(uint64_t)(uint32_t)a0,(uint64_t)(uint32_t)a1}; callVoid(env,id,a,2); }
+void highValueVmV3(JNIEnv *env, jclass, jint id, jint a0, jint a1, jint a2) { const uint64_t a[]{(uint64_t)(uint32_t)a0,(uint64_t)(uint32_t)a1,(uint64_t)(uint32_t)a2}; callVoid(env,id,a,3); }
+void highValueVmV4(JNIEnv *env, jclass, jint id, jint a0, jint a1, jint a2, jint a3) { const uint64_t a[]{(uint64_t)(uint32_t)a0,(uint64_t)(uint32_t)a1,(uint64_t)(uint32_t)a2,(uint64_t)(uint32_t)a3}; callVoid(env,id,a,4); }
+
+jlong highValueVmJ0(JNIEnv *env, jclass, jint id) { return callLong(env, id, nullptr, 0); }
+jlong highValueVmJ1(JNIEnv *env, jclass, jint id, jlong a0) { const uint64_t a[]{(uint64_t)a0}; return callLong(env,id,a,1); }
+jlong highValueVmJ2(JNIEnv *env, jclass, jint id, jlong a0, jlong a1) { const uint64_t a[]{(uint64_t)a0,(uint64_t)a1}; return callLong(env,id,a,2); }
+jlong highValueVmJ3(JNIEnv *env, jclass, jint id, jlong a0, jlong a1, jlong a2) { const uint64_t a[]{(uint64_t)a0,(uint64_t)a1,(uint64_t)a2}; return callLong(env,id,a,3); }
+jlong highValueVmJ4(JNIEnv *env, jclass, jint id, jlong a0, jlong a1, jlong a2, jlong a3) { const uint64_t a[]{(uint64_t)a0,(uint64_t)a1,(uint64_t)a2,(uint64_t)a3}; return callLong(env,id,a,4); }
+void highValueVmVJ0(JNIEnv *env, jclass, jint id) { callVoid(env,id,nullptr,0); }
+void highValueVmVJ1(JNIEnv *env, jclass, jint id, jlong a0) { const uint64_t a[]{(uint64_t)a0}; callVoid(env,id,a,1); }
+void highValueVmVJ2(JNIEnv *env, jclass, jint id, jlong a0, jlong a1) { const uint64_t a[]{(uint64_t)a0,(uint64_t)a1}; callVoid(env,id,a,2); }
+void highValueVmVJ3(JNIEnv *env, jclass, jint id, jlong a0, jlong a1, jlong a2) { const uint64_t a[]{(uint64_t)a0,(uint64_t)a1,(uint64_t)a2}; callVoid(env,id,a,3); }
+void highValueVmVJ4(JNIEnv *env, jclass, jint id, jlong a0, jlong a1, jlong a2, jlong a3) { const uint64_t a[]{(uint64_t)a0,(uint64_t)a1,(uint64_t)a2,(uint64_t)a3}; callVoid(env,id,a,4); }

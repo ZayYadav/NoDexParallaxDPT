@@ -46,6 +46,16 @@
     public static native void hvv2(int, int, int);
     public static native void hvv3(int, int, int, int);
     public static native void hvv4(int, int, int, int, int);
+    public static native long hvj0(int);
+    public static native long hvj1(int, long);
+    public static native long hvj2(int, long, long);
+    public static native long hvj3(int, long, long, long);
+    public static native long hvj4(int, long, long, long, long);
+    public static native void hvjv0(int);
+    public static native void hvjv1(int, long);
+    public static native void hvjv2(int, long, long);
+    public static native void hvjv3(int, long, long, long);
+    public static native void hvjv4(int, long, long, long, long);
 }
 
 -keepclassmembers,allowoptimization class com.parallax.shell.ParallaxKiSettingKarwaDo {
