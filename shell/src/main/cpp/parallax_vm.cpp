@@ -242,7 +242,7 @@ static bool decodeProgram(const VmProgram &p, std::vector<VmOp> &out) {
     ScopedWipe programWipe(programKey.data(), programKey.size());
     if (programKey.size() != 32) return false;
 
-    const std::string tagLabel = AY_OBFUSCATE("Parallax/highvalue/vm/ops/tag/v1/");
+    const std::string tagLabel = std::string(AY_OBFUSCATE("Parallax/highvalue/vm/ops/tag/v1/"));
     std::vector<uint8_t> tagInput;
     tagInput.reserve(tagLabel.size() + p.opNonce.size() + p.encodedOps.size());
     tagInput.insert(tagInput.end(), tagLabel.begin(), tagLabel.end());
