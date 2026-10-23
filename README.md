@@ -70,6 +70,9 @@ usage: java -jar parallax.jar [option] -f <package_file>
                              -K/--keep-classes, force signature pinning and every
                              runtime check, audit the output for original DEX bytes,
                              and securely erase protection workspaces. APK only.
+    --expect-sign <sha256>   Pin the certificate that will sign the APK *after*
+                             protection (64 hex chars, no colons). Use this when you
+                             protect first and re-sign with your own keystore later.
 ```
 
 ## One-way seal
@@ -100,8 +103,31 @@ The built-in signing key is public, so use a private keystore for deployments:
 java -jar parallax.jar -f app.apk --one-way -c protect-config.json -o out
 ```
 
-The input APK is never modified or deleted. Re-sign the sealed output only with the
-same key that produced the pinned certificate, otherwise the runtime check will kill it.
+The input APK is never modified or deleted. There are two signing workflows:
+
+**Sign during protection** with your private keystore (recommended). Parallax signs the
+output and pins that certificate automatically:
+
+```shell
+java -jar parallax.jar -f app.apk --one-way -c protect-config.json -o out
+```
+
+**Protect now, re-sign later.** Pass the SHA-256 of your final signing certificate so
+the payload seal and runtime pinning target it instead of the temporary protection key.
+Then re-sign the sealed output with that keystore before installing:
+
+```shell
+# SHA-256 of your release certificate (strip colons)
+keytool -list -v -keystore release.jks -alias app | grep SHA256
+
+java -jar parallax.jar -f app.apk --one-way \
+    --expect-sign <64-hex-sha256> -o out
+
+apksigner sign --ks release.jks --out out/app-release.apk out/app_signed.apk
+```
+
+The `.oneway` sidecar records the temporary build; re-signing changes the APK hash but
+does not affect runtime checks, which use the pinned certificate.
 
 Known limit: packages matched by the default compatibility exclusion rules (typically
 bundled AndroidX/Google libraries) stay in the hollowed dex. The seal covers the app's

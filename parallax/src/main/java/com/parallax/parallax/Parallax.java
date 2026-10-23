@@ -31,6 +31,7 @@ public class Parallax {
 
     private static final String MANIFEST_BUILD_KEY_ATTR = "Parallax-Build-Key";
     private static final String OPTION_HIGH_VALUE_METHODS = "high-value-methods";
+    private static String expectedSignSha256;
 
     public static void main(String[] args) {
         try {
@@ -64,6 +65,14 @@ public class Parallax {
             version = "unknown";
         }
         return version;
+    }
+
+    static void setExpectedSignSha256(String sha256) {
+        expectedSignSha256 = sha256;
+    }
+
+    public static String getExpectedSignSha256() {
+        return expectedSignSha256;
     }
 
     public static String getBuildKey() {
@@ -129,6 +138,8 @@ public class Parallax {
                 + "- x86\n"
                 + "- x86_64"));
         options.addOption(new Option(Const.OPTION_VERIFY_SIGN, Const.OPTION_VERIFY_SIGN_LONG, false, "Enable runtime app signature verification. The certificate SHA-256 is computed automatically from the signing keystore.\n"));
+        options.addOption(new Option(null, Const.OPTION_EXPECT_SIGN_LONG, true,
+                "Expected signing certificate SHA-256 for runtime pinning. Use when the APK will be re-signed after protection with your own keystore; the payload seal and runtime checks bind to this certificate instead of the temporary protection key.\n"));
         options.addOption(new Option(null, Const.OPTION_ONE_WAY_LONG, false,
                 "One-way seal: refuse already-protected inputs, forbid -K/--keep-classes, force signature "
                         + "pinning and every runtime check, audit the output for original DEX bytes, and "
@@ -178,6 +189,16 @@ public class Parallax {
                 riskCheckFlags |= Const.FLAG_DISABLE_ANTI_DEBUG;
             }
 
+            String expectedSign = commandLine.getOptionValue(Const.OPTION_EXPECT_SIGN_LONG);
+            if (expectedSign != null) {
+                expectedSign = expectedSign.trim().toLowerCase(java.util.Locale.US);
+                if (!expectedSign.matches("[0-9a-f]{64}")) {
+                    usage(options, "--expect-sign needs the 64-character SHA-256 of your signing certificate.");
+                    return null;
+                }
+            }
+            setExpectedSignSha256(expectedSign);
+
             boolean oneWaySeal = commandLine.hasOption(Const.OPTION_ONE_WAY_LONG);
             if (oneWaySeal && commandLine.hasOption(Const.OPTION_KEEP_CLASSES)) {
                 usage(options, "--one-way cannot be combined with -K/--keep-classes; kept method bodies remain recoverable from the APK.");
@@ -221,7 +242,7 @@ public class Parallax {
                         .keepClasses(commandLine.hasOption(Const.OPTION_KEEP_CLASSES))
                         .smaller(commandLine.hasOption(Const.OPTION_SMALLER))
                         .protectConfigFile(commandLine.getOptionValue(Const.OPTION_PROTECT_CONFIG))
-                        .verifySign(commandLine.hasOption(Const.OPTION_VERIFY_SIGN) || oneWaySeal)
+                        .verifySign(commandLine.hasOption(Const.OPTION_VERIFY_SIGN) || oneWaySeal || expectedSign != null)
                         .oneWaySeal(oneWaySeal)
                         .riskCheckFlags(riskCheckFlags)
                         .build();

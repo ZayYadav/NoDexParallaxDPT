@@ -1203,7 +1203,11 @@ public abstract class AndroidPackage {
             shellConfig.setRiskCheckFlags(0);
         }
 
-        if (isVerifySign()) {
+        String expectedSign = Parallax.getExpectedSignSha256();
+        if (expectedSign != null) {
+            shellConfig.setAppSignSha256(expectedSign);
+            LogUtils.info("Signature verification pinned to post-protection certificate SHA-256: " + expectedSign);
+        } else if (isVerifySign()) {
             String sha256 = computeSignatureSha256();
             if (sha256 != null) {
                 shellConfig.setAppSignSha256(sha256);

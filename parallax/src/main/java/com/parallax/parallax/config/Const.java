@@ -45,6 +45,8 @@ public class Const {
     public static final String OPTION_VERIFY_SIGN = "vs";
     public static final String OPTION_VERIFY_SIGN_LONG = "verify-sign";
 
+    public static final String OPTION_EXPECT_SIGN_LONG = "expect-sign";
+
     public static final String OPTION_ONE_WAY_LONG = "one-way";
     public static final String ONE_WAY_SEAL_SUFFIX = ".oneway";
 
