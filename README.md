@@ -26,6 +26,9 @@ cd executable
 java -jar parallax.jar -f /path/to/android-package-file
 ```
 
+The native build needs `python3`: `scripts/seal_native_hash.py` runs as a post-link
+step and embeds the `.text` SHA-256.
+
 ### Command line options
 
 ```text
@@ -93,11 +96,15 @@ usage: java -jar parallax.jar [option] -f <package_file>
   memory dump does not begin as a valid DEX (the loaded classes keep running);
 - re-randomizes those headers from the hardening watchdog and kills the process if the
   live header is repaired;
-- installs decoy DEX buffers with valid magic/checksum and random class data, so a
-  memory dumper emits several unusable candidates alongside the real stubs;
+- installs ten decoy DEX buffers (six DEX-shaped with valid checksum and random
+  class data) so a memory dumper emits several unusable candidates alongside the
+  real stubs;
 - streams every classic VM opcode array through a per-program HMAC-SHA256 keystream
-  with a keyed tag, decrypts only into a short-lived local buffer at call time, and
-  zeroes it after execution; a live opcode patch fails the tag check;
+  with a keyed tag and decodes one instruction at a time from ciphertext, wiping each
+  short-lived local opcode after use; a live opcode patch fails the tag check;
+- seals the native `.text` section with a build-time SHA-256 stored in `.data`;
+  the constructor and watchdog re-hash the mapped text, so an inline Frida hook or
+  a patched decoder is detected and the process is killed before app output;
 - does **not** pin the signing certificate by default, so the sealed APK can be
   re-signed with any keystore;
 - audits the finished APK and aborts if any original `classes*.dex` header or digest is
@@ -147,8 +154,10 @@ A signing certificate cannot stop someone from re-signing the **original** APK a
 installing that instead. Keep the original APK; the seal protects the protected build,
 not the fact that an unprotected copy exists elsewhere.
 
-Known limit: packages matched by the default compatibility exclusion rules (typically
-bundled AndroidX/Google libraries) stay in the hollowed dex. The seal covers the app's
+Known limits: packages matched by the default compatibility exclusion rules (typically
+bundled AndroidX/Google libraries) stay in the hollowed dex. The native VM intentionally
+covers a bounded int/long/float/double subset; methods using unsupported object/array/
+invoke patterns keep their original bodies in the runtime dex. The seal covers the app's
 own classes; it does not claim byte-for-byte erasure of third-party library code.
 
 No client-side packer is unbreakable. The one-way seal blocks static unzip/dump/repack
@@ -162,10 +171,12 @@ direct buffer because ART must read it. The shell invalidates that buffer's DEX 
 (checksum and SHA-1) right after loading and keeps re-randomizing it, so a raw dump
 starts as a corrupt DEX; it also plants decoy DEX buffers. The method bodies of
 VM-routed methods are native stubs, not original code. Classic VM opcodes are
-keystream-encrypted in memory and decrypted per call, but the build secret lives in the
-native library, so kernel-level instrumentation can eventually recover it. A determined
-attacker can repair the DEX header and ignore the stubs, and a passive `/proc/<pid>/mem`
-scan still recovers the remaining bytes. `MADV_DONTDUMP`/`PROT_NONE` do not stop it
+keystream-encrypted in memory and decoded one instruction at a time, but the build
+secret lives in the native library, so kernel-level instrumentation can eventually
+recover it. The `.text` seal detects inline patching/hooking of the decoder, but not
+GOT/PLT redirection, dynamic tracing, or a fully repackaged library whose `.data` seal
+was recomputed. A determined attacker can repair the DEX header and ignore the stubs,
+and a passive `/proc/<pid>/mem` scan still recovers the remaining bytes. `MADV_DONTDUMP`/`PROT_NONE` do not stop it
 because `/proc/pid/mem` uses `FOLL_FORCE`; `memfd_secret` would help, but Android
 kernels commonly ship without `CONFIG_SECRETMEM`.
 
