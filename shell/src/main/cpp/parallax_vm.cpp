@@ -5,6 +5,7 @@
 #include "parallax_risk.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -67,6 +68,7 @@ struct VmOp {
 };
 
 struct VmProgram {
+    uint32_t id = 0;
     uint16_t registers = 0;
     uint8_t parameters = 0;
     uint8_t parameterRegisters = 0;
@@ -74,7 +76,10 @@ struct VmProgram {
     uint8_t returnType = RET_VOID;
     bool returnsValue = false;
     bool doubleArguments = false;
-    std::vector<VmOp> ops;
+    uint32_t opCount = 0;
+    std::array<uint8_t, 8> opNonce{};
+    std::array<uint8_t, 16> opTag{};
+    std::vector<uint8_t> encodedOps;
 };
 
 std::unordered_map<uint32_t, VmProgram> g_programs;
@@ -97,6 +102,26 @@ static bool hasBytes(size_t cursor, size_t amount, size_t total) {
     return cursor <= total && amount <= total - cursor;
 }
 
+struct ScopedWipe {
+    void *data;
+    size_t size;
+    ScopedWipe(void *data, size_t size) : data(data), size(size) {}
+    ~ScopedWipe() { if (data != nullptr && size != 0) secure_zero(data, size); }
+};
+
+static bool constantTimeEqual(const uint8_t *lhs, const uint8_t *rhs, size_t length) {
+    uint8_t diff = 0;
+    for (size_t i = 0; i < length; ++i) diff |= static_cast<uint8_t>(lhs[i] ^ rhs[i]);
+    return diff == 0;
+}
+
+static void putBe32(uint8_t *p, uint32_t value) {
+    p[0] = static_cast<uint8_t>(value >> 24u);
+    p[1] = static_cast<uint8_t>(value >> 16u);
+    p[2] = static_cast<uint8_t>(value >> 8u);
+    p[3] = static_cast<uint8_t>(value);
+}
+
 static bool regOk(const VmProgram &p, uint8_t r) {
     return r < p.registers;
 }
@@ -105,7 +130,7 @@ static bool wideRegOk(const VmProgram &p, uint8_t r) {
     return static_cast<uint16_t>(r) + 1u < p.registers;
 }
 
-static bool validate(const VmProgram &p, const VmOp &op) {
+static bool validate(const VmProgram &p, const VmOp &op, size_t opCount) {
     switch (op.opcode) {
         case OP_NOP: case OP_GOTO: case OP_RETURN_VOID:
             break;
@@ -194,12 +219,75 @@ static bool validate(const VmProgram &p, const VmOp &op) {
             return false;
     }
     if ((op.opcode == OP_GOTO || (op.opcode >= OP_IF_EQZ && op.opcode <= OP_IF_LE))
-            && op.target >= p.ops.size()) return false;
+            && op.target >= opCount) return false;
+    return true;
+}
+
+static bool decodeProgram(const VmProgram &p, std::vector<VmOp> &out) {
+    const size_t encodedSize = static_cast<size_t>(p.opCount) * 12u;
+    if (p.opCount == 0 || p.encodedOps.size() != encodedSize) return false;
+
+    const char *buildKey = AY_OBFUSCATE(PARALLAX_BUILD_KEY);
+    std::string baseLabel = std::string(AY_OBFUSCATE("Parallax/highvalue/vm/ops/v1/"))
+            + buildKey;
+    std::vector<uint8_t> baseKey = hmac_sha256(PARALLAX_UNKNOWN_DATA, 16,
+            reinterpret_cast<const uint8_t *>(baseLabel.data()), baseLabel.size());
+    ScopedWipe baseWipe(baseKey.data(), baseKey.size());
+    if (baseKey.size() != 32) return false;
+
+    std::string programLabel = std::string(AY_OBFUSCATE("Parallax/highvalue/vm/ops/program/v1/"))
+            + std::to_string(p.id);
+    std::vector<uint8_t> programKey = hmac_sha256(baseKey.data(), baseKey.size(),
+            reinterpret_cast<const uint8_t *>(programLabel.data()), programLabel.size());
+    ScopedWipe programWipe(programKey.data(), programKey.size());
+    if (programKey.size() != 32) return false;
+
+    const std::string tagLabel = AY_OBFUSCATE("Parallax/highvalue/vm/ops/tag/v1/");
+    std::vector<uint8_t> tagInput;
+    tagInput.reserve(tagLabel.size() + p.opNonce.size() + p.encodedOps.size());
+    tagInput.insert(tagInput.end(), tagLabel.begin(), tagLabel.end());
+    tagInput.insert(tagInput.end(), p.opNonce.begin(), p.opNonce.end());
+    tagInput.insert(tagInput.end(), p.encodedOps.begin(), p.encodedOps.end());
+    ScopedWipe tagInputWipe(tagInput.data(), tagInput.size());
+
+    std::vector<uint8_t> expectedTag = hmac_sha256(programKey.data(), programKey.size(),
+            tagInput.data(), tagInput.size());
+    ScopedWipe tagWipe(expectedTag.data(), expectedTag.size());
+    if (expectedTag.size() < p.opTag.size()
+            || !constantTimeEqual(expectedTag.data(), p.opTag.data(), p.opTag.size())) {
+        return false;
+    }
+
+    std::vector<uint8_t> plain(encodedSize);
+    ScopedWipe plainWipe(plain.data(), plain.size());
+    for (size_t offset = 0, counter = 0; offset < plain.size(); ++counter) {
+        std::array<uint8_t, 12> blockInput{};
+        std::copy(p.opNonce.begin(), p.opNonce.end(), blockInput.begin());
+        putBe32(blockInput.data() + 8, static_cast<uint32_t>(counter));
+        std::vector<uint8_t> block = hmac_sha256(programKey.data(), programKey.size(),
+                blockInput.data(), blockInput.size());
+        ScopedWipe blockWipe(block.data(), block.size());
+        size_t take = std::min(block.size(), plain.size() - offset);
+        for (size_t i = 0; i < take; ++i) {
+            plain[offset + i] = static_cast<uint8_t>(p.encodedOps[offset + i] ^ block[i]);
+        }
+        offset += take;
+    }
+
+    out.resize(p.opCount);
+    for (uint32_t i = 0; i < p.opCount; ++i) {
+        const uint8_t *bytes = plain.data() + static_cast<size_t>(i) * 12u;
+        VmOp op;
+        op.opcode = bytes[0]; op.a = bytes[1]; op.b = bytes[2]; op.c = bytes[3];
+        op.imm = static_cast<int32_t>(be32(bytes + 4));
+        op.target = be32(bytes + 8);
+        out[i] = op;
+    }
     return true;
 }
 
 static bool parsePayload(const std::vector<uint8_t> &raw) {
-    if (raw.size() < 8 || memcmp(raw.data(), "PVR2", 4) != 0) return false;
+    if (raw.size() < 8 || memcmp(raw.data(), "PVR3", 4) != 0) return false;
     size_t cursor = 4;
     uint32_t count = be32(raw.data() + cursor); cursor += 4;
     if (count == 0 || count > kMaxPrograms) return false;
@@ -210,6 +298,7 @@ static bool parsePayload(const std::vector<uint8_t> &raw) {
         if (!hasBytes(cursor, 14, raw.size())) return false;
         uint32_t id = be32(raw.data() + cursor); cursor += 4;
         VmProgram p;
+        p.id = id;
         p.registers = be16(raw.data() + cursor); cursor += 2;
         p.parameters = raw[cursor++];
         p.parameterRegisters = raw[cursor++];
@@ -232,22 +321,34 @@ static bool parsePayload(const std::vector<uint8_t> &raw) {
         }
         if (width != p.parameterRegisters) return false;
         p.returnsValue = p.returnType != RET_VOID;
-        if (!hasBytes(cursor, static_cast<size_t>(opCount) * 12u, raw.size())) return false;
-        p.ops.reserve(opCount);
-        for (uint32_t i = 0; i < opCount; ++i) {
-            VmOp op;
-            op.opcode = raw[cursor++]; op.a = raw[cursor++]; op.b = raw[cursor++]; op.c = raw[cursor++];
-            op.imm = static_cast<int32_t>(be32(raw.data() + cursor)); cursor += 4;
-            op.target = be32(raw.data() + cursor); cursor += 4;
-            p.ops.push_back(op);
+
+        const size_t encodedSize = static_cast<size_t>(opCount) * 12u;
+        if (!hasBytes(cursor, p.opNonce.size() + p.opTag.size() + encodedSize, raw.size())) {
+            return false;
         }
-        for (const VmOp &op : p.ops) if (!validate(p, op)) return false;
+        std::copy(raw.begin() + cursor, raw.begin() + cursor + p.opNonce.size(),
+                p.opNonce.begin());
+        cursor += p.opNonce.size();
+        std::copy(raw.begin() + cursor, raw.begin() + cursor + p.opTag.size(),
+                p.opTag.begin());
+        cursor += p.opTag.size();
+        p.encodedOps.assign(raw.begin() + cursor, raw.begin() + cursor + encodedSize);
+        cursor += encodedSize;
+        p.opCount = opCount;
+
+        std::vector<VmOp> ops;
+        if (!decodeProgram(p, ops)) return false;
+        ScopedWipe opsWipe(ops.data(), ops.size() * sizeof(VmOp));
+        for (const VmOp &op : ops) {
+            if (!validate(p, op, opCount)) return false;
+        }
         parsed.emplace(id, std::move(p));
     }
     if (cursor != raw.size()) return false;
     g_programs.swap(parsed);
     return true;
 }
+
 
 static void tamper() {
     g_programs.clear();
@@ -351,6 +452,13 @@ static bool run(JNIEnv *env, uint32_t id, const uint64_t *args, size_t argc,
         return false;
     }
 
+    std::vector<VmOp> ops;
+    if (!decodeProgram(p, ops)) {
+        tamper();
+        return false;
+    }
+    ScopedWipe opsWipe(ops.data(), ops.size() * sizeof(VmOp));
+
     std::vector<int32_t> r(p.registers, 0);
     size_t parameterBase = p.registers - p.parameterRegisters;
     size_t parameterOffset = 0;
@@ -384,9 +492,9 @@ static bool run(JNIEnv *env, uint32_t id, const uint64_t *args, size_t argc,
 
     size_t pc = 0;
     size_t steps = 0;
-    const size_t limit = std::max<size_t>(4096u, p.ops.size() * 256u);
-    while (pc < p.ops.size() && steps++ < limit) {
-        const VmOp &op = p.ops[pc];
+    const size_t limit = std::max<size_t>(4096u, ops.size() * 256u);
+    while (pc < ops.size() && steps++ < limit) {
+        const VmOp &op = ops[pc];
         switch (op.opcode) {
             case OP_NOP: ++pc; break;
             case OP_CONST: r[op.a] = op.imm; ++pc; break;

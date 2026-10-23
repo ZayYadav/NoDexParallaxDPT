@@ -59,10 +59,16 @@ import java.util.regex.Pattern;
  */
 public final class HighValueVmTransformer {
     private static final byte[] ENVELOPE_MAGIC = {'P', 'V', 'M', '2'};
-    private static final byte[] RAW_MAGIC = {'P', 'V', 'R', '2'};
+    private static final byte[] RAW_MAGIC = {'P', 'V', 'R', '3'};
     private static final String KEY_LABEL = "Parallax/highvalue/vm/encryption/v1/";
     private static final String AAD_PREFIX = "Parallax/highvalue/vm/payload/v1/";
+    private static final String OPS_KEY_LABEL = "Parallax/highvalue/vm/ops/v1/";
+    private static final String OPS_PROGRAM_LABEL = "Parallax/highvalue/vm/ops/program/v1/";
+    private static final String OPS_TAG_LABEL = "Parallax/highvalue/vm/ops/tag/v1/";
     private static final int NONCE_SIZE = 12;
+    private static final int OP_NONCE_SIZE = 8;
+    private static final int OP_TAG_SIZE = 16;
+    private static final int OP_BYTES = 12;
     private static final SecureRandom RANDOM = new SecureRandom();
 
     // Keep in sync with shell/src/main/cpp/parallax_vm.cpp.
@@ -297,7 +303,7 @@ public final class HighValueVmTransformer {
         if (buildKey == null || buildKey.isEmpty()) {
             throw new IOException("Parallax build key is missing; cannot seal high-value VM payload");
         }
-        byte[] raw = serialize(programs);
+        byte[] raw = serialize(programs, encKey, buildKey);
         byte[] payloadKey = CryptoUtils.hmacSha256(encKey, KEY_LABEL + buildKey);
         byte[] nonce = new byte[NONCE_SIZE];
         RANDOM.nextBytes(nonce);
@@ -319,26 +325,90 @@ public final class HighValueVmTransformer {
         Arrays.fill(aad, (byte) 0);
     }
 
-    private static byte[] serialize(List<Program> programs) throws IOException {
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        try (DataOutputStream out = new DataOutputStream(buffer)) {
-            out.write(RAW_MAGIC);
-            out.writeInt(programs.size());
-            for (Program p : programs) {
-                out.writeInt(p.id);
-                out.writeShort(p.registerCount);
-                out.writeByte(p.parameterCount);
-                out.writeByte(p.parameterRegisters);
-                out.writeByte(p.parameterTypes);
-                out.writeByte(p.returnType | (p.doubleArguments ? 0x80 : 0));
-                out.writeInt(p.ops.size());
-                for (VmOp op : p.ops) {
-                    out.writeByte(op.opcode); out.writeByte(op.a); out.writeByte(op.b); out.writeByte(op.c);
-                    out.writeInt(op.imm); out.writeInt(op.target);
+    private static byte[] serialize(List<Program> programs, byte[] encKey, String buildKey)
+            throws IOException {
+        byte[] opKey = CryptoUtils.hmacSha256(encKey, OPS_KEY_LABEL + buildKey);
+        try {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            try (DataOutputStream out = new DataOutputStream(buffer)) {
+                out.write(RAW_MAGIC);
+                out.writeInt(programs.size());
+                for (Program p : programs) {
+                    out.writeInt(p.id);
+                    out.writeShort(p.registerCount);
+                    out.writeByte(p.parameterCount);
+                    out.writeByte(p.parameterRegisters);
+                    out.writeByte(p.parameterTypes);
+                    out.writeByte(p.returnType | (p.doubleArguments ? 0x80 : 0));
+                    out.writeInt(p.ops.size());
+
+                    byte[] nonce = new byte[OP_NONCE_SIZE];
+                    RANDOM.nextBytes(nonce);
+                    byte[] plain = encodeOps(p.ops);
+                    byte[] programKey = CryptoUtils.hmacSha256(
+                            opKey, OPS_PROGRAM_LABEL + p.id);
+                    byte[] cipher = xorStream(programKey, nonce, plain);
+                    byte[] tagMaterial = concat(
+                            OPS_TAG_LABEL.getBytes(StandardCharsets.US_ASCII), nonce, cipher);
+                    byte[] tag = CryptoUtils.hmacSha256(programKey, tagMaterial);
+
+                    out.write(nonce);
+                    out.write(tag, 0, OP_TAG_SIZE);
+                    out.write(cipher);
+                    Arrays.fill(programKey, (byte) 0);
+                    Arrays.fill(plain, (byte) 0);
+                    Arrays.fill(cipher, (byte) 0);
+                    Arrays.fill(tag, (byte) 0);
+                    Arrays.fill(tagMaterial, (byte) 0);
                 }
+            }
+            return buffer.toByteArray();
+        } finally {
+            Arrays.fill(opKey, (byte) 0);
+        }
+    }
+
+    private static byte[] encodeOps(List<VmOp> ops) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream(ops.size() * OP_BYTES);
+        try (DataOutputStream out = new DataOutputStream(buffer)) {
+            for (VmOp op : ops) {
+                out.writeByte(op.opcode); out.writeByte(op.a);
+                out.writeByte(op.b); out.writeByte(op.c);
+                out.writeInt(op.imm); out.writeInt(op.target);
             }
         }
         return buffer.toByteArray();
+    }
+
+    private static byte[] xorStream(byte[] key, byte[] nonce, byte[] input) {
+        byte[] output = new byte[input.length];
+        for (int offset = 0, counter = 0; offset < input.length; ++counter) {
+            byte[] block = CryptoUtils.hmacSha256(key, concat(nonce, be32(counter)));
+            int take = Math.min(block.length, input.length - offset);
+            for (int i = 0; i < take; ++i) output[offset + i] = (byte) (input[offset + i] ^ block[i]);
+            offset += take;
+            Arrays.fill(block, (byte) 0);
+        }
+        return output;
+    }
+
+    private static byte[] be32(int value) {
+        return new byte[]{
+                (byte) (value >>> 24), (byte) (value >>> 16),
+                (byte) (value >>> 8), (byte) value
+        };
+    }
+
+    private static byte[] concat(byte[]... parts) {
+        int length = 0;
+        for (byte[] part : parts) length += part.length;
+        byte[] out = new byte[length];
+        int offset = 0;
+        for (byte[] part : parts) {
+            System.arraycopy(part, 0, out, offset, part.length);
+            offset += part.length;
+        }
+        return out;
     }
 
     private static String signatureOf(Method method) {
