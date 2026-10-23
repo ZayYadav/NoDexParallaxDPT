@@ -76,6 +76,13 @@ void loadDexesToMemory(void *package_addr, size_t package_size);
 const std::vector<std::pair<uint8_t *, size_t>> &getInMemoryDexFiles();
 void clearInMemoryDexFiles();
 
+/**
+ * Invalidate the in-memory DEX header after ART has opened it. The loaded
+ * classes stay usable, but a raw memory dump no longer carries a valid DEX
+ * checksum/SHA-1 header.
+ */
+void poisonInMemoryDexHeaders();
+
 std::optional<std::tuple<uint8_t*, size_t>> read_zip_file_entry(void* zip_addr, off_t zip_size, const char* entry_name);
 
 int find_in_maps(int count,...);

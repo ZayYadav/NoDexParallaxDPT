@@ -12,6 +12,7 @@
 #include <string>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <vector>
 #include <optional>
 #include <sys/syscall.h>
@@ -390,6 +391,33 @@ void clearInMemoryDexFiles() {
         item.first = nullptr;
     }
     g_inMemoryDexFiles.clear();
+}
+
+void poisonInMemoryDexHeaders() {
+    static bool s_poisoned = false;
+    if (s_poisoned) {
+        return;
+    }
+    s_poisoned = true;
+
+    uint64_t state = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&s_poisoned))
+                     ^ static_cast<uint64_t>(time(nullptr));
+    for (auto &item: g_inMemoryDexFiles) {
+        uint8_t *data = item.first;
+        const size_t size = item.second;
+        if (data == nullptr || size < 32 || memcmp(data, "dex\n", 4) != 0) {
+            continue;
+        }
+        // checksum (8..11) and SHA-1 signature (12..31) are only validated when
+        // ART opens the DEX; classes already loaded keep working from the same buffer.
+        for (size_t i = 8; i < 32; i++) {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            data[i] = static_cast<uint8_t>(state);
+        }
+    }
+    DLOGI("invalidated in-memory DEX headers after loading");
 }
 
 static int classes_dex_index(const char *filename) {
