@@ -996,6 +996,38 @@ public abstract class AndroidPackage {
             ZipAlign.alignZip(in, out);
             out.getFD().sync();
         }
+        trimAlignedZipTail(outputPackagePath);
+    }
+
+    /**
+     * zipalign-java 1.0.0 has an unaligned fast path that writes full 8 KiB buffers
+     * without honoring the final short read, leaving stale bytes after the ZIP EOCD.
+     * apksigner then rejects the APK. Trim back to the EOCD-declared size.
+     */
+    private static void trimAlignedZipTail(String path) throws IOException {
+        try (RandomAccessFile file = new RandomAccessFile(path, "rw")) {
+            final long size = file.length();
+            final long searchStart = Math.max(0, size - 65557);
+            long eocd = -1;
+            for (long pos = size - 22; pos >= searchStart; pos--) {
+                file.seek(pos);
+                if (file.read() == 0x50 && file.read() == 0x4b
+                        && file.read() == 0x05 && file.read() == 0x06) {
+                    eocd = pos;
+                    break;
+                }
+            }
+            if (eocd < 0) return;
+            file.seek(eocd + 20);
+            int lo = file.read();
+            int hi = file.read();
+            if (lo < 0 || hi < 0) return;
+            long expected = eocd + 22 + ((hi << 8) | lo);
+            if (size > expected) {
+                file.setLength(expected);
+                LogUtils.warn("Trimmed %d stale bytes after ZIP EOCD", size - expected);
+            }
+        }
     }
 
     private void processRuleFile() {
