@@ -638,7 +638,15 @@ static jfloat callFloat(JNIEnv *env, jint id, const uint64_t *args, size_t argc)
 static jdouble callDouble(JNIEnv *env, jint id, const uint64_t *args, size_t argc) {
     uint64_t result = 0;
     if (!run(env, static_cast<uint32_t>(id), args, argc, true, &result)) return 0.0;
-    return doubleFromBits(result);
+    auto found = g_programs.find(static_cast<uint32_t>(id));
+    if (found == g_programs.end()) return 0.0;
+    switch (found->second.returnType) {
+        case RET_INT: return static_cast<double>(static_cast<int32_t>(result));
+        case RET_FLOAT: return static_cast<double>(floatFromBits(static_cast<uint32_t>(result)));
+        case RET_LONG: return static_cast<double>(static_cast<int64_t>(result));
+        case RET_DOUBLE: return doubleFromBits(result);
+        default: return 0.0;
+    }
 }
 
 static void callVoid(JNIEnv *env, jint id, const uint64_t *args, size_t argc) {
