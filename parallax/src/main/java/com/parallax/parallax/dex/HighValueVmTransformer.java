@@ -311,7 +311,7 @@ public final class HighValueVmTransformer {
         return out.append(')').append(method.getReturnType()).toString();
     }
 
-    private static Program compile(int methodId, String signature, Method method) throws IOException {
+    static Program compile(int methodId, String signature, Method method) throws IOException {
         int flags = method.getAccessFlags();
         if ((flags & AccessFlags.STATIC.getValue()) == 0) throw unsupported(signature, "method must be static");
         if ((flags & (AccessFlags.NATIVE.getValue() | AccessFlags.ABSTRACT.getValue())) != 0
