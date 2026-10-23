@@ -142,9 +142,11 @@ Known limit: packages matched by the default compatibility exclusion rules (typi
 bundled AndroidX/Google libraries) stay in the hollowed dex. The seal covers the app's
 own classes; it does not claim byte-for-byte erasure of third-party library code.
 
-No client-side packer is unbreakable. The one-way seal blocks the normal
-unzip/dump/repack/re-sign recovery workflows and makes tampering fail closed; it does
-not defeat a determined reverse engineer with kernel-level instrumentation.
+No client-side packer is unbreakable. The one-way seal blocks static unzip/dump/repack
+recovery and makes payload tampering fail closed, but it cannot block re-signing (the
+protected APK accepts any certificate by default, and the original APK can always be
+re-signed). It does not defeat a determined reverse engineer with kernel-level
+instrumentation.
 
 On a rooted device, the decrypted DEX lives in the
 `InMemoryDexClassLoader` direct buffer (ART requires it to be readable). A passive
