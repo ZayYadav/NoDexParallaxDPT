@@ -407,7 +407,7 @@ public final class HighValueVmTransformer {
                 return v(OP_CONST_WIDE, a(i), 0, 0, (int) value, (int) (value >>> 32));
             }
             case CONST_WIDE_HIGH16: {
-                long value = ((long) ((NarrowLiteralInstruction) i).getNarrowLiteral()) << 48;
+                long value = ((WideLiteralInstruction) i).getWideLiteral();
                 return v(OP_CONST_WIDE, a(i), 0, 0, (int) value, (int) (value >>> 32));
             }
             case MOVE: case MOVE_FROM16: case MOVE_16:
