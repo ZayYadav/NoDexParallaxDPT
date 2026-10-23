@@ -15,6 +15,7 @@
 #include <cstring>
 #include <vector>
 #include <array>
+#include <atomic>
 #include <mutex>
 #include <optional>
 #include <sys/syscall.h>
@@ -396,6 +397,7 @@ void clearInMemoryDexFiles() {
 }
 
 static std::vector<std::array<uint8_t, 24>> g_dexPoisonTokens;
+static std::atomic<bool> g_dexPoisonArmed{false};
 
 static uint64_t poisonState(uint64_t seed) {
     for (int i = 0; i < 4; i++) {
@@ -409,6 +411,9 @@ static uint64_t poisonState(uint64_t seed) {
 bool refreshInMemoryDexPoison() {
     static std::mutex poisonMutex;
     std::lock_guard<std::mutex> guard(poisonMutex);
+    if (!g_dexPoisonArmed) {
+        return true;
+    }
     const bool verify = !g_dexPoisonTokens.empty();
     if (verify && g_dexPoisonTokens.size() != g_inMemoryDexFiles.size()) {
         return false;
@@ -462,6 +467,7 @@ static void writeLe32(uint8_t *out, uint32_t value) {
 }
 
 void poisonInMemoryDexHeaders() {
+    g_dexPoisonArmed = true;
     (void) refreshInMemoryDexPoison();
 }
 
