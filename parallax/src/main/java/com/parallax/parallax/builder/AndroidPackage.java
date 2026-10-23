@@ -875,20 +875,34 @@ public abstract class AndroidPackage {
                 + File.separator
                 + (resultFileName != null ? resultFileName : getSignedPackageName(originPackageName));
 
+        File signedPackageFile = new File(signedPackagePath);
         if(isSign()) {
-            if(shellConfig.getSignatureConfig() == null || !new File(shellConfig.getSignatureConfig().getKeystore()).exists()) {
-                LogUtils.info("Use default key store");
-                signResult = signPackageDebug(willSignPackagePath, keyStoreFilePath, signedPackagePath);
-            }
-            else {
-                LogUtils.info("Use custom key store");
-                signResult = sign(willSignPackagePath,
-                        shellConfig.getSignatureConfig().getKeystore(),
-                        signedPackagePath,
-                        shellConfig.getSignatureConfig().getAlias(),
-                        shellConfig.getSignatureConfig().getStorePassword(),
-                        shellConfig.getSignatureConfig().getKeyPassword()
-                        );
+            final boolean useDefaultKeyStore = shellConfig.getSignatureConfig() == null
+                    || !new File(shellConfig.getSignatureConfig().getKeystore()).exists();
+            for (int attempt = 1; attempt <= 4 && !signResult; attempt++) {
+                if (attempt > 1) {
+                    LogUtils.warn("Signing failed once; retrying with the same input");
+                    if (signedPackageFile.exists() && !signedPackageFile.delete()) {
+                        LogUtils.warn("Cannot remove partial signed output: %s", signedPackagePath);
+                    }
+                }
+                if (useDefaultKeyStore) {
+                    LogUtils.info("Use default key store");
+                    signResult = signPackageDebug(willSignPackagePath, keyStoreFilePath, signedPackagePath);
+                } else {
+                    LogUtils.info("Use custom key store");
+                    signResult = sign(willSignPackagePath,
+                            shellConfig.getSignatureConfig().getKeystore(),
+                            signedPackagePath,
+                            shellConfig.getSignatureConfig().getAlias(),
+                            shellConfig.getSignatureConfig().getStorePassword(),
+                            shellConfig.getSignatureConfig().getKeyPassword()
+                            );
+                }
+                if (signResult && signedPackageFile.length() <= 0) {
+                    LogUtils.warn("Signer produced an empty output");
+                    signResult = false;
+                }
             }
         }
         else {
@@ -901,7 +915,6 @@ public abstract class AndroidPackage {
         }
 
         File willSignPackageFile = new File(willSignPackagePath);
-        File signedPackageFile = new File(signedPackagePath);
         File keyStoreFile = new File(keyStoreFilePath);
         File idsigFile = new File(signedPackagePath + ".idsig");
 
