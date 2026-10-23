@@ -479,9 +479,11 @@ void installDexDecoys() {
 
     uint64_t state = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(&decoys))
                      ^ static_cast<uint64_t>(time(nullptr)) ^ 0xd1b54a32d192ed03ULL;
-    for (int n = 0; n < 6; n++) {
+    for (int n = 0; n < 10; n++) {
         state = poisonState(state);
-        const size_t size = 32768u + (state % 65536u);
+        const size_t size = n < 5
+                ? 8192u + (state % 4096u)
+                : 32768u + (state % 65536u);
         std::vector<uint8_t> fake(size);
         for (size_t i = 0; i < size; i++) {
             state = poisonState(state);

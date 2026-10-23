@@ -223,25 +223,27 @@ static bool validate(const VmProgram &p, const VmOp &op, size_t opCount) {
     return true;
 }
 
-static bool decodeProgram(const VmProgram &p, std::vector<VmOp> &out) {
-    const size_t encodedSize = static_cast<size_t>(p.opCount) * 12u;
-    if (p.opCount == 0 || p.encodedOps.size() != encodedSize) return false;
-
+static std::vector<uint8_t> deriveProgramKey(const VmProgram &p) {
     const char *buildKey = AY_OBFUSCATE(PARALLAX_BUILD_KEY);
     std::string baseLabel = std::string(AY_OBFUSCATE("Parallax/highvalue/vm/ops/v1/"))
             + buildKey;
     std::vector<uint8_t> baseKey = hmac_sha256(PARALLAX_UNKNOWN_DATA, 16,
             reinterpret_cast<const uint8_t *>(baseLabel.data()), baseLabel.size());
     ScopedWipe baseWipe(baseKey.data(), baseKey.size());
-    if (baseKey.size() != 32) return false;
+    if (baseKey.size() != 32) return {};
 
     std::string programLabel = std::string(AY_OBFUSCATE("Parallax/highvalue/vm/ops/program/v1/"))
             + std::to_string(p.id);
     std::vector<uint8_t> programKey = hmac_sha256(baseKey.data(), baseKey.size(),
             reinterpret_cast<const uint8_t *>(programLabel.data()), programLabel.size());
-    ScopedWipe programWipe(programKey.data(), programKey.size());
-    if (programKey.size() != 32) return false;
+    if (programKey.size() != 32) {
+        if (!programKey.empty()) secure_zero(programKey.data(), programKey.size());
+        return {};
+    }
+    return programKey;
+}
 
+static bool verifyProgramTag(const VmProgram &p, const std::vector<uint8_t> &programKey) {
     const std::string tagLabel = std::string(AY_OBFUSCATE("Parallax/highvalue/vm/ops/tag/v1/"));
     std::vector<uint8_t> tagInput;
     tagInput.reserve(tagLabel.size() + p.opNonce.size() + p.encodedOps.size());
@@ -253,36 +255,41 @@ static bool decodeProgram(const VmProgram &p, std::vector<VmOp> &out) {
     std::vector<uint8_t> expectedTag = hmac_sha256(programKey.data(), programKey.size(),
             tagInput.data(), tagInput.size());
     ScopedWipe tagWipe(expectedTag.data(), expectedTag.size());
-    if (expectedTag.size() < p.opTag.size()
-            || !constantTimeEqual(expectedTag.data(), p.opTag.data(), p.opTag.size())) {
-        return false;
-    }
+    return expectedTag.size() >= p.opTag.size()
+           && constantTimeEqual(expectedTag.data(), p.opTag.data(), p.opTag.size());
+}
 
-    std::vector<uint8_t> plain(encodedSize);
+static bool decodeOp(const VmProgram &p, const std::vector<uint8_t> &programKey,
+                     uint32_t index, VmOp &op) {
+    if (index >= p.opCount) return false;
+    const size_t start = static_cast<size_t>(index) * 12u;
+    std::array<uint8_t, 12> plain{};
     ScopedWipe plainWipe(plain.data(), plain.size());
-    for (size_t offset = 0, counter = 0; offset < plain.size(); ++counter) {
+
+    for (size_t done = 0; done < plain.size();) {
+        const size_t absolute = start + done;
+        const uint32_t counter = static_cast<uint32_t>(absolute / 32u);
+        const size_t inBlock = absolute % 32u;
+
         std::array<uint8_t, 12> blockInput{};
         std::copy(p.opNonce.begin(), p.opNonce.end(), blockInput.begin());
-        putBe32(blockInput.data() + 8, static_cast<uint32_t>(counter));
+        putBe32(blockInput.data() + 8, counter);
         std::vector<uint8_t> block = hmac_sha256(programKey.data(), programKey.size(),
                 blockInput.data(), blockInput.size());
         ScopedWipe blockWipe(block.data(), block.size());
-        size_t take = std::min(block.size(), plain.size() - offset);
+        if (block.empty()) return false;
+
+        const size_t take = std::min(plain.size() - done, block.size() - inBlock);
         for (size_t i = 0; i < take; ++i) {
-            plain[offset + i] = static_cast<uint8_t>(p.encodedOps[offset + i] ^ block[i]);
+            plain[done + i] = static_cast<uint8_t>(
+                    p.encodedOps[start + done + i] ^ block[inBlock + i]);
         }
-        offset += take;
+        done += take;
     }
 
-    out.resize(p.opCount);
-    for (uint32_t i = 0; i < p.opCount; ++i) {
-        const uint8_t *bytes = plain.data() + static_cast<size_t>(i) * 12u;
-        VmOp op;
-        op.opcode = bytes[0]; op.a = bytes[1]; op.b = bytes[2]; op.c = bytes[3];
-        op.imm = static_cast<int32_t>(be32(bytes + 4));
-        op.target = be32(bytes + 8);
-        out[i] = op;
-    }
+    op.opcode = plain[0]; op.a = plain[1]; op.b = plain[2]; op.c = plain[3];
+    op.imm = static_cast<int32_t>(be32(plain.data() + 4));
+    op.target = be32(plain.data() + 8);
     return true;
 }
 
@@ -336,11 +343,14 @@ static bool parsePayload(const std::vector<uint8_t> &raw) {
         cursor += encodedSize;
         p.opCount = opCount;
 
-        std::vector<VmOp> ops;
-        if (!decodeProgram(p, ops)) return false;
-        ScopedWipe opsWipe(ops.data(), ops.size() * sizeof(VmOp));
-        for (const VmOp &op : ops) {
-            if (!validate(p, op, opCount)) return false;
+        std::vector<uint8_t> programKey = deriveProgramKey(p);
+        ScopedWipe keyWipe(programKey.data(), programKey.size());
+        if (programKey.size() != 32 || !verifyProgramTag(p, programKey)) return false;
+        for (uint32_t i = 0; i < opCount; ++i) {
+            VmOp op;
+            ScopedWipe opWipe(&op, sizeof op);
+            if (!decodeOp(p, programKey, i, op)
+                    || !validate(p, op, opCount)) return false;
         }
         parsed.emplace(id, std::move(p));
     }
@@ -452,12 +462,12 @@ static bool run(JNIEnv *env, uint32_t id, const uint64_t *args, size_t argc,
         return false;
     }
 
-    std::vector<VmOp> ops;
-    if (!decodeProgram(p, ops)) {
+    std::vector<uint8_t> programKey = deriveProgramKey(p);
+    ScopedWipe keyWipe(programKey.data(), programKey.size());
+    if (programKey.size() != 32 || !verifyProgramTag(p, programKey)) {
         tamper();
         return false;
     }
-    ScopedWipe opsWipe(ops.data(), ops.size() * sizeof(VmOp));
 
     std::vector<int32_t> r(p.registers, 0);
     size_t parameterBase = p.registers - p.parameterRegisters;
@@ -492,9 +502,14 @@ static bool run(JNIEnv *env, uint32_t id, const uint64_t *args, size_t argc,
 
     size_t pc = 0;
     size_t steps = 0;
-    const size_t limit = std::max<size_t>(4096u, ops.size() * 256u);
-    while (pc < ops.size() && steps++ < limit) {
-        const VmOp &op = ops[pc];
+    const size_t limit = std::max<size_t>(4096u, static_cast<size_t>(p.opCount) * 256u);
+    while (pc < p.opCount && steps++ < limit) {
+        VmOp op;
+        ScopedWipe opWipe(&op, sizeof op);
+        if (!decodeOp(p, programKey, static_cast<uint32_t>(pc), op)) {
+            tamper();
+            return false;
+        }
         switch (op.opcode) {
             case OP_NOP: ++pc; break;
             case OP_CONST: r[op.a] = op.imm; ++pc; break;
