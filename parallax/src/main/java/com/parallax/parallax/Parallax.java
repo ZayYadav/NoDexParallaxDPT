@@ -242,7 +242,7 @@ public class Parallax {
                         .keepClasses(commandLine.hasOption(Const.OPTION_KEEP_CLASSES))
                         .smaller(commandLine.hasOption(Const.OPTION_SMALLER))
                         .protectConfigFile(commandLine.getOptionValue(Const.OPTION_PROTECT_CONFIG))
-                        .verifySign(commandLine.hasOption(Const.OPTION_VERIFY_SIGN) || oneWaySeal || expectedSign != null)
+                        .verifySign(commandLine.hasOption(Const.OPTION_VERIFY_SIGN) || expectedSign != null)
                         .oneWaySeal(oneWaySeal)
                         .riskCheckFlags(riskCheckFlags)
                         .build();

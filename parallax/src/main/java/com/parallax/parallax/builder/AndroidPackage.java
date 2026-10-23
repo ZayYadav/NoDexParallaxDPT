@@ -1214,7 +1214,7 @@ public abstract class AndroidPackage {
                 shellConfig.setAppSignSha256(sha256);
                 LogUtils.info("Signature verification enabled, SHA-256: " + sha256);
             } else if (isOneWaySeal()) {
-                throw new IllegalStateException("One-way seal requires signature pinning, but the signing certificate could not be read.");
+                throw new IllegalStateException("Signature verification was requested, but the signing certificate could not be read.");
             } else {
                 LogUtils.error("Failed to compute certificate SHA-256, signature verification disabled.");
             }

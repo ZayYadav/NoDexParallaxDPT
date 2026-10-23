@@ -67,9 +67,10 @@ usage: java -jar parallax.jar [option] -f <package_file>
                              automatically from the signing keystore.
  -x,--no-sign                Do not sign package.
     --one-way                One-way seal: refuse already-protected inputs, forbid
-                             -K/--keep-classes, force signature pinning and every
-                             runtime check, audit the output for original DEX bytes,
-                             and securely erase protection workspaces. APK only.
+                             -K/--keep-classes, force every runtime integrity check,
+                             audit the output for original DEX bytes, and securely
+                             erase protection workspaces. Any signing certificate is
+                             accepted by default. APK only.
     --expect-sign <sha256>   Pin the certificate that will sign the APK *after*
                              protection (64 hex chars, no colons). Use this when you
                              protect first and re-sign with your own keystore later.
@@ -86,8 +87,10 @@ usage: java -jar parallax.jar [option] -f <package_file>
   recoverable code behind or weakens the bootstrap;
 - routes every method the native VM can compile (up to 2000) instead of the top-96
   heuristic, and logs routed/eligible/deferred/unsupported coverage for the build;
-- forces runtime signature pinning, Frida/CRC/anti-debug checks, and native payload
-  authentication to **fail closed** (the process is killed on mismatch);
+- forces Frida/CRC/anti-debug checks and native payload authentication to **fail
+  closed** (the process is killed on mismatch);
+- does **not** pin the signing certificate by default, so the sealed APK can be
+  re-signed with any keystore;
 - audits the finished APK and aborts if any original `classes*.dex` header or digest is
   still present in any entry;
 - overwrites and erases the workspace and every intermediate artifact;
@@ -103,21 +106,21 @@ The built-in signing key is public, so use a private keystore for deployments:
 java -jar parallax.jar -f app.apk --one-way -c protect-config.json -o out
 ```
 
-The input APK is never modified or deleted. There are two signing workflows:
-
-**Sign during protection** with your private keystore (recommended). Parallax signs the
-output and pins that certificate automatically:
+The input APK is never modified or deleted. The sealed output **does not care which
+certificate signs it**. Sign it during protection with any keystore, or re-sign the
+result afterward:
 
 ```shell
-java -jar parallax.jar -f app.apk --one-way -c protect-config.json -o out
+apksigner sign --ks any-release.jks --out out/app-release.apk out/app_signed.apk
 ```
 
-**Protect now, re-sign later.** Pass the SHA-256 of your final signing certificate so
-the payload seal and runtime pinning target it instead of the temporary protection key.
-Then re-sign the sealed output with that keystore before installing:
+Pinning is optional, not required by `--one-way`:
+
+- `--verify-sign` pins the certificate read from the signing keystore used by Parallax.
+- `--expect-sign <sha256>` pins the certificate you will use later, before re-signing:
 
 ```shell
-# SHA-256 of your release certificate (strip colons)
+# SHA-256 of the final certificate (strip colons)
 keytool -list -v -keystore release.jks -alias app | grep SHA256
 
 java -jar parallax.jar -f app.apk --one-way \
@@ -126,8 +129,14 @@ java -jar parallax.jar -f app.apk --one-way \
 apksigner sign --ks release.jks --out out/app-release.apk out/app_signed.apk
 ```
 
-The `.oneway` sidecar records the temporary build; re-signing changes the APK hash but
-does not affect runtime checks, which use the pinned certificate.
+Payload authentication uses a per-build key embedded in the native library, independent
+of the APK signature, so an unpinned, re-signed APK still fails closed if its protected
+DEX is modified. Re-signing changes the APK hash recorded in `<output>.oneway`; that
+sidecar is audit metadata only.
+
+A signing certificate cannot stop someone from re-signing the **original** APK and
+installing that instead. Keep the original APK; the seal protects the protected build,
+not the fact that an unprotected copy exists elsewhere.
 
 Known limit: packages matched by the default compatibility exclusion rules (typically
 bundled AndroidX/Google libraries) stay in the hollowed dex. The seal covers the app's
