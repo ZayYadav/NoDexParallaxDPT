@@ -130,6 +130,32 @@ public final class HighValueVmTransformer {
     public static final int OP_INT_TO_LONG = 78;
     public static final int OP_LONG_TO_INT = 79;
     public static final int OP_RETURN_LONG = 80;
+    public static final int OP_ADD_FLOAT = 81;
+    public static final int OP_SUB_FLOAT = 82;
+    public static final int OP_MUL_FLOAT = 83;
+    public static final int OP_DIV_FLOAT = 84;
+    public static final int OP_REM_FLOAT = 85;
+    public static final int OP_NEG_FLOAT = 86;
+    public static final int OP_CMPL_FLOAT = 87;
+    public static final int OP_CMPG_FLOAT = 88;
+    public static final int OP_INT_TO_FLOAT = 89;
+    public static final int OP_LONG_TO_FLOAT = 90;
+    public static final int OP_FLOAT_TO_INT = 91;
+    public static final int OP_FLOAT_TO_LONG = 92;
+    public static final int OP_FLOAT_TO_DOUBLE = 93;
+    public static final int OP_ADD_DOUBLE = 94;
+    public static final int OP_SUB_DOUBLE = 95;
+    public static final int OP_MUL_DOUBLE = 96;
+    public static final int OP_DIV_DOUBLE = 97;
+    public static final int OP_REM_DOUBLE = 98;
+    public static final int OP_NEG_DOUBLE = 99;
+    public static final int OP_CMPL_DOUBLE = 100;
+    public static final int OP_CMPG_DOUBLE = 101;
+    public static final int OP_INT_TO_DOUBLE = 102;
+    public static final int OP_LONG_TO_DOUBLE = 103;
+    public static final int OP_DOUBLE_TO_INT = 104;
+    public static final int OP_DOUBLE_TO_LONG = 105;
+    public static final int OP_DOUBLE_TO_FLOAT = 106;
 
     private HighValueVmTransformer() {}
 
@@ -172,6 +198,8 @@ public final class HighValueVmTransformer {
         static final int RETURN_VOID = 0;
         static final int RETURN_INT = 1;
         static final int RETURN_LONG = 2;
+        static final int RETURN_FLOAT = 3;
+        static final int RETURN_DOUBLE = 4;
 
         final int id, registerCount, parameterCount, parameterRegisters, parameterTypes, returnType;
         final boolean returnsValue;
@@ -323,15 +351,23 @@ public final class HighValueVmTransformer {
 
         int parameterRegisters = 0;
         int parameterTypes = 0;
+        char parameterGroup = 0;
         for (int i = 0; i < method.getParameterTypes().size(); i++) {
             String type = method.getParameterTypes().get(i).toString();
-            char kind;
+            int kind;
             int width;
-            if ("I".equals(type)) { kind = 'I'; width = 1; }
-            else if ("J".equals(type)) { kind = 'J'; width = 2; }
-            else throw unsupported(signature, "v2 accepts only int or long parameters");
+            if ("I".equals(type)) { kind = 0; width = 1; }
+            else if ("J".equals(type)) { kind = 1; width = 2; }
+            else if ("F".equals(type)) { kind = 2; width = 1; }
+            else if ("D".equals(type)) { kind = 3; width = 2; }
+            else throw unsupported(signature, "v2 accepts only int, long, float or double parameters");
+            char group = kind < 2 ? 'N' : type.charAt(0);
+            if (parameterGroup == 0) parameterGroup = group;
+            else if (parameterGroup != group) {
+                throw unsupported(signature, "v2 cannot mix floating and integer parameters");
+            }
             parameterRegisters += width;
-            parameterTypes |= (kind == 'J' ? 1 : 0) << (i * 2);
+            parameterTypes |= kind << (i * 2);
         }
 
         String returnTypeName = method.getReturnType().toString();
@@ -339,7 +375,21 @@ public final class HighValueVmTransformer {
         if ("V".equals(returnTypeName)) returnType = Program.RETURN_VOID;
         else if ("I".equals(returnTypeName)) returnType = Program.RETURN_INT;
         else if ("J".equals(returnTypeName)) returnType = Program.RETURN_LONG;
-        else throw unsupported(signature, "v2 return type must be int, long or void");
+        else if ("F".equals(returnTypeName)) returnType = Program.RETURN_FLOAT;
+        else if ("D".equals(returnTypeName)) returnType = Program.RETURN_DOUBLE;
+        else throw unsupported(signature, "v2 return type must be int, long, float, double or void");
+        if (parameterGroup == 'N' && (returnType == Program.RETURN_FLOAT
+                || returnType == Program.RETURN_DOUBLE)) {
+            throw unsupported(signature, "v2 integer parameters cannot return a floating value");
+        }
+        if (parameterGroup == 'F' && returnType != Program.RETURN_VOID
+                && returnType != Program.RETURN_FLOAT) {
+            throw unsupported(signature, "v2 float parameters require float or void return");
+        }
+        if (parameterGroup == 'D' && returnType != Program.RETURN_VOID
+                && returnType != Program.RETURN_DOUBLE) {
+            throw unsupported(signature, "v2 double parameters require double or void return");
+        }
 
         MethodImplementation impl = method.getImplementation();
         if (impl == null) throw unsupported(signature, "method has no implementation");
@@ -475,6 +525,42 @@ public final class HighValueVmTransformer {
             case IF_GE: return twoBranch(OP_IF_GE, i, signature, address, targets);
             case IF_GT: return twoBranch(OP_IF_GT, i, signature, address, targets);
             case IF_LE: return twoBranch(OP_IF_LE, i, signature, address, targets);
+            case ADD_FLOAT: return three(OP_ADD_FLOAT, i);
+            case SUB_FLOAT: return three(OP_SUB_FLOAT, i);
+            case MUL_FLOAT: return three(OP_MUL_FLOAT, i);
+            case DIV_FLOAT: return three(OP_DIV_FLOAT, i);
+            case REM_FLOAT: return three(OP_REM_FLOAT, i);
+            case ADD_FLOAT_2ADDR: return two(OP_ADD_FLOAT, i);
+            case SUB_FLOAT_2ADDR: return two(OP_SUB_FLOAT, i);
+            case MUL_FLOAT_2ADDR: return two(OP_MUL_FLOAT, i);
+            case DIV_FLOAT_2ADDR: return two(OP_DIV_FLOAT, i);
+            case REM_FLOAT_2ADDR: return two(OP_REM_FLOAT, i);
+            case NEG_FLOAT: return v(OP_NEG_FLOAT, a(i), b(i), 0, 0, 0);
+            case CMPL_FLOAT: return three(OP_CMPL_FLOAT, i);
+            case CMPG_FLOAT: return three(OP_CMPG_FLOAT, i);
+            case INT_TO_FLOAT: return v(OP_INT_TO_FLOAT, a(i), b(i), 0, 0, 0);
+            case LONG_TO_FLOAT: return v(OP_LONG_TO_FLOAT, a(i), b(i), 0, 0, 0);
+            case FLOAT_TO_INT: return v(OP_FLOAT_TO_INT, a(i), b(i), 0, 0, 0);
+            case FLOAT_TO_LONG: return v(OP_FLOAT_TO_LONG, a(i), b(i), 0, 0, 0);
+            case FLOAT_TO_DOUBLE: return v(OP_FLOAT_TO_DOUBLE, a(i), b(i), 0, 0, 0);
+            case ADD_DOUBLE: return three(OP_ADD_DOUBLE, i);
+            case SUB_DOUBLE: return three(OP_SUB_DOUBLE, i);
+            case MUL_DOUBLE: return three(OP_MUL_DOUBLE, i);
+            case DIV_DOUBLE: return three(OP_DIV_DOUBLE, i);
+            case REM_DOUBLE: return three(OP_REM_DOUBLE, i);
+            case ADD_DOUBLE_2ADDR: return two(OP_ADD_DOUBLE, i);
+            case SUB_DOUBLE_2ADDR: return two(OP_SUB_DOUBLE, i);
+            case MUL_DOUBLE_2ADDR: return two(OP_MUL_DOUBLE, i);
+            case DIV_DOUBLE_2ADDR: return two(OP_DIV_DOUBLE, i);
+            case REM_DOUBLE_2ADDR: return two(OP_REM_DOUBLE, i);
+            case NEG_DOUBLE: return v(OP_NEG_DOUBLE, a(i), b(i), 0, 0, 0);
+            case CMPL_DOUBLE: return three(OP_CMPL_DOUBLE, i);
+            case CMPG_DOUBLE: return three(OP_CMPG_DOUBLE, i);
+            case INT_TO_DOUBLE: return v(OP_INT_TO_DOUBLE, a(i), b(i), 0, 0, 0);
+            case LONG_TO_DOUBLE: return v(OP_LONG_TO_DOUBLE, a(i), b(i), 0, 0, 0);
+            case DOUBLE_TO_INT: return v(OP_DOUBLE_TO_INT, a(i), b(i), 0, 0, 0);
+            case DOUBLE_TO_LONG: return v(OP_DOUBLE_TO_LONG, a(i), b(i), 0, 0, 0);
+            case DOUBLE_TO_FLOAT: return v(OP_DOUBLE_TO_FLOAT, a(i), b(i), 0, 0, 0);
             case RETURN: return v(OP_RETURN, a(i), 0, 0, 0, 0);
             case RETURN_WIDE: return v(OP_RETURN_LONG, a(i), 0, 0, 0, 0);
             case RETURN_VOID: return v(OP_RETURN_VOID, 0, 0, 0, 0, 0);
@@ -514,23 +600,33 @@ public final class HighValueVmTransformer {
         String returnType = method.getReturnType().toString();
         boolean hasLongParam = false;
         boolean hasIntParam = false;
+        boolean hasFloatParam = false;
+        boolean hasDoubleParam = false;
         for (CharSequence type : method.getParameterTypes()) {
             if ("J".contentEquals(type)) hasLongParam = true;
+            else if ("F".contentEquals(type)) hasFloatParam = true;
+            else if ("D".contentEquals(type)) hasDoubleParam = true;
             else hasIntParam = true;
         }
-        boolean widened = hasIntParam && (hasLongParam || "J".equals(returnType));
+        boolean floating = hasFloatParam || hasDoubleParam
+                || "F".equals(returnType) || "D".equals(returnType);
+        boolean doubleKind = hasDoubleParam || "D".equals(returnType);
+        boolean widened = !floating && hasIntParam && (hasLongParam || "J".equals(returnType));
 
         int parameterRegisters = 0;
         List<String> bridgeParams = new ArrayList<>();
         bridgeParams.add("I");
         for (CharSequence type : method.getParameterTypes()) {
             String value = type.toString();
-            parameterRegisters += "J".equals(value) ? 2 : 1;
+            parameterRegisters += ("J".equals(value) || "D".equals(value)) ? 2 : 1;
             bridgeParams.add(widened ? "J" : value);
         }
 
         String bridgeName;
-        if (widened) {
+        if (floating) {
+            bridgeName = ("V".equals(returnType) ? (doubleKind ? "hvdv" : "hvfv")
+                    : (doubleKind ? "hvd" : "hvf")) + params;
+        } else if (widened) {
             bridgeName = ("V".equals(returnType) ? "hvjv" : "hvj") + params;
         } else if ("V".equals(returnType)) {
             bridgeName = (hasLongParam ? "hvjv" : "hvv") + params;
@@ -547,12 +643,12 @@ public final class HighValueVmTransformer {
         List<Instruction> code = new ArrayList<>();
         int frame = 1 + parameterRegisters * 2;
         if (widened) frame = Math.max(frame, 1 + params * 2);
-        if (("J".equals(returnType) || widened) && frame < 2) frame = 2;
+        if (("J".equals(returnType) || "D".equals(returnType) || widened) && frame < 2) frame = 2;
         int incomingBase = 1 + parameterRegisters;
         int destination = 1;
         int offset = 0;
         for (CharSequence type : method.getParameterTypes()) {
-            boolean wide = "J".contentEquals(type);
+            boolean wide = "J".contentEquals(type) || "D".contentEquals(type);
             if (widened) {
                 code.add(new ImmutableInstruction12x(
                         wide ? Opcode.MOVE_WIDE : Opcode.INT_TO_LONG,
@@ -568,10 +664,10 @@ public final class HighValueVmTransformer {
         code.add(new ImmutableInstruction31i(Opcode.CONST, 0, methodId));
         code.add(new ImmutableInstruction3rc(Opcode.INVOKE_STATIC_RANGE, 0,
                 callRegisters, bridge));
-        if ("J".equals(returnType)) {
+        if ("J".equals(returnType) || "D".equals(returnType)) {
             code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_WIDE, 0));
             code.add(new ImmutableInstruction11x(Opcode.RETURN_WIDE, 0));
-        } else if ("I".equals(returnType)) {
+        } else if ("I".equals(returnType) || "F".equals(returnType)) {
             if (widened) {
                 code.add(new ImmutableInstruction11x(Opcode.MOVE_RESULT_WIDE, 0));
                 code.add(new ImmutableInstruction12x(Opcode.LONG_TO_INT, 0, 0));

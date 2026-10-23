@@ -31,4 +31,28 @@ public final class Parallax16 {
     public static native void hvjv2(int methodId, long a0, long a1);
     public static native void hvjv3(int methodId, long a0, long a1, long a2);
     public static native void hvjv4(int methodId, long a0, long a1, long a2, long a3);
+
+    public static native float hvf0(int methodId);
+    public static native float hvf1(int methodId, float a0);
+    public static native float hvf2(int methodId, float a0, float a1);
+    public static native float hvf3(int methodId, float a0, float a1, float a2);
+    public static native float hvf4(int methodId, float a0, float a1, float a2, float a3);
+
+    public static native void hvfv0(int methodId);
+    public static native void hvfv1(int methodId, float a0);
+    public static native void hvfv2(int methodId, float a0, float a1);
+    public static native void hvfv3(int methodId, float a0, float a1, float a2);
+    public static native void hvfv4(int methodId, float a0, float a1, float a2, float a3);
+
+    public static native double hvd0(int methodId);
+    public static native double hvd1(int methodId, double a0);
+    public static native double hvd2(int methodId, double a0, double a1);
+    public static native double hvd3(int methodId, double a0, double a1, double a2);
+    public static native double hvd4(int methodId, double a0, double a1, double a2, double a3);
+
+    public static native void hvdv0(int methodId);
+    public static native void hvdv1(int methodId, double a0);
+    public static native void hvdv2(int methodId, double a0, double a1);
+    public static native void hvdv3(int methodId, double a0, double a1, double a2);
+    public static native void hvdv4(int methodId, double a0, double a1, double a2, double a3);
 }

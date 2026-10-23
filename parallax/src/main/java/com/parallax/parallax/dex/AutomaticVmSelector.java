@@ -150,19 +150,30 @@ final class AutomaticVmSelector {
         if ("<init>".equals(method.getName()) || "<clinit>".equals(method.getName())) return null;
         if (method.getParameterTypes().size() > 4) return null;
 
-        boolean hasLongParam = false;
+        char parameterGroup = 0;
+        boolean classic = false;
         int parameterRegisters = 0;
         for (CharSequence type : method.getParameterTypes()) {
             char kind;
             if ("I".contentEquals(type)) kind = 'I';
             else if ("J".contentEquals(type)) kind = 'J';
+            else if ("F".contentEquals(type)) kind = 'F';
+            else if ("D".contentEquals(type)) kind = 'D';
             else return null;
-            if (kind == 'J') hasLongParam = true;
-            parameterRegisters += kind == 'J' ? 2 : 1;
+            char group = (kind == 'I' || kind == 'J') ? 'N' : kind;
+            if (parameterGroup == 0) parameterGroup = group;
+            else if (parameterGroup != group) return null;
+            if (kind != 'I') classic = true;
+            parameterRegisters += (kind == 'J' || kind == 'D') ? 2 : 1;
         }
         String returnType = method.getReturnType().toString();
-        if (!"I".equals(returnType) && !"J".equals(returnType) && !"V".equals(returnType)) return null;
-        char valueType = hasLongParam || "J".equals(returnType) ? 'J' : 'I';
+        if (!"I".equals(returnType) && !"J".equals(returnType) && !"V".equals(returnType)
+                && !"F".equals(returnType) && !"D".equals(returnType)) return null;
+        if (parameterGroup == 'F' && !"F".equals(returnType) && !"V".equals(returnType)) return null;
+        if (parameterGroup == 'D' && !"D".equals(returnType) && !"V".equals(returnType)) return null;
+        if (parameterGroup == 'N' && ("F".equals(returnType) || "D".equals(returnType))) return null;
+        if (!"I".equals(returnType) && !"V".equals(returnType)) classic = true;
+        char valueType = classic ? 'J' : 'I';
 
         MethodImplementation impl = method.getImplementation();
         if (impl == null || !impl.getTryBlocks().isEmpty()) return null;
@@ -279,6 +290,18 @@ final class AutomaticVmSelector {
             case REM_INT_LIT8: case REM_INT_LIT16: case AND_INT_LIT8: case AND_INT_LIT16:
             case OR_INT_LIT8: case OR_INT_LIT16: case XOR_INT_LIT8: case XOR_INT_LIT16:
             case SHL_INT_LIT8: case SHR_INT_LIT8: case USHR_INT_LIT8:
+            case ADD_FLOAT: case SUB_FLOAT: case MUL_FLOAT: case DIV_FLOAT: case REM_FLOAT:
+            case ADD_FLOAT_2ADDR: case SUB_FLOAT_2ADDR: case MUL_FLOAT_2ADDR:
+            case DIV_FLOAT_2ADDR: case REM_FLOAT_2ADDR:
+            case NEG_FLOAT: case CMPL_FLOAT: case CMPG_FLOAT:
+            case INT_TO_FLOAT: case LONG_TO_FLOAT: case FLOAT_TO_INT: case FLOAT_TO_LONG:
+            case FLOAT_TO_DOUBLE:
+            case ADD_DOUBLE: case SUB_DOUBLE: case MUL_DOUBLE: case DIV_DOUBLE: case REM_DOUBLE:
+            case ADD_DOUBLE_2ADDR: case SUB_DOUBLE_2ADDR: case MUL_DOUBLE_2ADDR:
+            case DIV_DOUBLE_2ADDR: case REM_DOUBLE_2ADDR:
+            case NEG_DOUBLE: case CMPL_DOUBLE: case CMPG_DOUBLE:
+            case INT_TO_DOUBLE: case LONG_TO_DOUBLE: case DOUBLE_TO_INT: case DOUBLE_TO_LONG:
+            case DOUBLE_TO_FLOAT:
             case GOTO: case GOTO_16: case GOTO_32:
             case IF_EQZ: case IF_NEZ: case IF_LTZ: case IF_GEZ: case IF_GTZ: case IF_LEZ:
             case IF_EQ: case IF_NE: case IF_LT: case IF_GE: case IF_GT: case IF_LE:

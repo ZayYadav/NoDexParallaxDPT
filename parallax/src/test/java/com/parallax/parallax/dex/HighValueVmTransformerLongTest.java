@@ -72,6 +72,42 @@ public class HighValueVmTransformerLongTest {
     }
 
     @Test
+    public void floatParametersUseFloatBridgeTypes() throws Exception {
+        Method method = method("scale", List.of("F", "F"), "F", 3, List.of(
+                new ImmutableInstruction11x(Opcode.RETURN, 0)
+        ));
+
+        HighValueVmTransformer.Program program = HighValueVmTransformer.compile(
+                6, "Lsample/LongOps;->scale(FF)F", method);
+
+        assertEquals(2, program.parameterRegisters);
+        assertEquals(10, program.parameterTypes);
+        assertEquals(HighValueVmTransformer.Program.RETURN_FLOAT, program.returnType);
+    }
+
+    @Test
+    public void doubleParametersUseWidePairs() throws Exception {
+        Method method = method("scale", List.of("D", "D"), "D", 5, List.of(
+                new ImmutableInstruction11x(Opcode.RETURN_WIDE, 0)
+        ));
+
+        HighValueVmTransformer.Program program = HighValueVmTransformer.compile(
+                7, "Lsample/LongOps;->scale(DD)D", method);
+
+        assertEquals(4, program.parameterRegisters);
+        assertEquals(15, program.parameterTypes);
+        assertEquals(HighValueVmTransformer.Program.RETURN_DOUBLE, program.returnType);
+    }
+
+    @Test(expected = java.io.IOException.class)
+    public void floatingAndIntegerParametersCannotMix() throws Exception {
+        Method method = method("invalid", List.of("I", "F"), "F", 3, List.of(
+                new ImmutableInstruction11x(Opcode.RETURN, 0)
+        ));
+        HighValueVmTransformer.compile(8, "Lsample/LongOps;->invalid(IF)F", method);
+    }
+
+    @Test
     public void mixedIntAndLongParametersAreAccepted() throws Exception {
         Method method = method("mixed", List.of("I", "J"), "J", 4, List.of(
                 new ImmutableInstruction11x(Opcode.RETURN_WIDE, 0)

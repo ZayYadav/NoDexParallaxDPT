@@ -5,6 +5,7 @@
 #include "parallax_risk.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -38,12 +39,20 @@ enum : uint8_t {
     OP_REM_LONG = 68, OP_AND_LONG = 69, OP_OR_LONG = 70, OP_XOR_LONG = 71,
     OP_SHL_LONG = 72, OP_SHR_LONG = 73, OP_USHR_LONG = 74,
     OP_NEG_LONG = 75, OP_NOT_LONG = 76, OP_CMP_LONG = 77,
-    OP_INT_TO_LONG = 78, OP_LONG_TO_INT = 79, OP_RETURN_LONG = 80
+    OP_INT_TO_LONG = 78, OP_LONG_TO_INT = 79, OP_RETURN_LONG = 80,
+    OP_ADD_FLOAT = 81, OP_SUB_FLOAT = 82, OP_MUL_FLOAT = 83, OP_DIV_FLOAT = 84,
+    OP_REM_FLOAT = 85, OP_NEG_FLOAT = 86, OP_CMPL_FLOAT = 87, OP_CMPG_FLOAT = 88,
+    OP_INT_TO_FLOAT = 89, OP_LONG_TO_FLOAT = 90, OP_FLOAT_TO_INT = 91,
+    OP_FLOAT_TO_LONG = 92, OP_FLOAT_TO_DOUBLE = 93,
+    OP_ADD_DOUBLE = 94, OP_SUB_DOUBLE = 95, OP_MUL_DOUBLE = 96, OP_DIV_DOUBLE = 97,
+    OP_REM_DOUBLE = 98, OP_NEG_DOUBLE = 99, OP_CMPL_DOUBLE = 100, OP_CMPG_DOUBLE = 101,
+    OP_INT_TO_DOUBLE = 102, OP_LONG_TO_DOUBLE = 103, OP_DOUBLE_TO_INT = 104,
+    OP_DOUBLE_TO_LONG = 105, OP_DOUBLE_TO_FLOAT = 106
 };
 
 enum : uint8_t {
-    RET_VOID = 0, RET_INT = 1, RET_LONG = 2,
-    PARAM_INT = 0, PARAM_LONG = 1
+    RET_VOID = 0, RET_INT = 1, RET_LONG = 2, RET_FLOAT = 3, RET_DOUBLE = 4,
+    PARAM_INT = 0, PARAM_LONG = 1, PARAM_FLOAT = 2, PARAM_DOUBLE = 3
 };
 
 constexpr size_t kEnvelopeHeader = 20; // magic + raw length + 12-byte nonce
@@ -129,6 +138,50 @@ static bool validate(const VmProgram &p, const VmOp &op) {
         case OP_CMP_LONG:
             if (!regOk(p, op.a) || !wideRegOk(p, op.b) || !wideRegOk(p, op.c)) return false;
             break;
+        case OP_NEG_FLOAT:
+            if (!regOk(p, op.a) || !regOk(p, op.b)) return false;
+            break;
+        case OP_ADD_FLOAT: case OP_SUB_FLOAT: case OP_MUL_FLOAT: case OP_DIV_FLOAT:
+        case OP_REM_FLOAT: case OP_CMPL_FLOAT: case OP_CMPG_FLOAT:
+            if (!regOk(p, op.a) || !regOk(p, op.b) || !regOk(p, op.c)) return false;
+            break;
+        case OP_INT_TO_FLOAT: case OP_FLOAT_TO_INT:
+            if (!regOk(p, op.a) || !regOk(p, op.b)) return false;
+            break;
+        case OP_LONG_TO_FLOAT:
+            if (!regOk(p, op.a) || !wideRegOk(p, op.b)) return false;
+            break;
+        case OP_FLOAT_TO_LONG:
+            if (!wideRegOk(p, op.a) || !regOk(p, op.b)) return false;
+            break;
+        case OP_FLOAT_TO_DOUBLE:
+            if (!wideRegOk(p, op.a) || !regOk(p, op.b)) return false;
+            break;
+        case OP_NEG_DOUBLE:
+            if (!wideRegOk(p, op.a) || !wideRegOk(p, op.b)) return false;
+            break;
+        case OP_ADD_DOUBLE: case OP_SUB_DOUBLE: case OP_MUL_DOUBLE: case OP_DIV_DOUBLE:
+        case OP_REM_DOUBLE:
+            if (!wideRegOk(p, op.a) || !wideRegOk(p, op.b) || !wideRegOk(p, op.c)) return false;
+            break;
+        case OP_CMPL_DOUBLE: case OP_CMPG_DOUBLE:
+            if (!regOk(p, op.a) || !wideRegOk(p, op.b) || !wideRegOk(p, op.c)) return false;
+            break;
+        case OP_INT_TO_DOUBLE:
+            if (!wideRegOk(p, op.a) || !regOk(p, op.b)) return false;
+            break;
+        case OP_LONG_TO_DOUBLE:
+            if (!wideRegOk(p, op.a) || !wideRegOk(p, op.b)) return false;
+            break;
+        case OP_DOUBLE_TO_INT:
+            if (!regOk(p, op.a) || !wideRegOk(p, op.b)) return false;
+            break;
+        case OP_DOUBLE_TO_LONG:
+            if (!wideRegOk(p, op.a) || !wideRegOk(p, op.b)) return false;
+            break;
+        case OP_DOUBLE_TO_FLOAT:
+            if (!regOk(p, op.a) || !wideRegOk(p, op.b)) return false;
+            break;
         case OP_ADD_LONG: case OP_SUB_LONG: case OP_MUL_LONG: case OP_DIV_LONG:
         case OP_REM_LONG: case OP_AND_LONG: case OP_OR_LONG: case OP_XOR_LONG:
             if (!wideRegOk(p, op.a) || !wideRegOk(p, op.b) || !wideRegOk(p, op.c)) return false;
@@ -163,14 +216,14 @@ static bool parsePayload(const std::vector<uint8_t> &raw) {
         p.returnType = raw[cursor++];
         uint32_t opCount = be32(raw.data() + cursor); cursor += 4;
         if (id == 0 || p.registers == 0 || p.registers > 255 || p.parameters > 4
-                || p.parameterRegisters > p.registers || p.returnType > RET_LONG
+                || p.parameterRegisters > p.registers || p.returnType > RET_DOUBLE
                 || opCount == 0 || opCount > kMaxOpsPerProgram
                 || parsed.find(id) != parsed.end()) return false;
         uint32_t width = 0;
         for (uint32_t i = 0; i < p.parameters; ++i) {
             uint8_t kind = (p.parameterTypes >> (i * 2u)) & 0x3u;
-            if (kind == PARAM_INT) width += 1;
-            else if (kind == PARAM_LONG) width += 2;
+            if (kind == PARAM_INT || kind == PARAM_FLOAT) width += 1;
+            else if (kind == PARAM_LONG || kind == PARAM_DOUBLE) width += 2;
             else return false;
         }
         if (width != p.parameterRegisters) return false;
@@ -214,6 +267,68 @@ static void setLong(std::vector<int32_t> &r, uint8_t reg, uint64_t value) {
     r[static_cast<size_t>(reg) + 1] = static_cast<int32_t>(static_cast<uint32_t>(value >> 32u));
 }
 
+static float floatFromBits(uint32_t bits) {
+    float value;
+    std::memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+static uint32_t bitsFromFloat(float value) {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof bits);
+    return bits;
+}
+
+static double doubleFromBits(uint64_t bits) {
+    double value;
+    std::memcpy(&value, &bits, sizeof value);
+    return value;
+}
+
+static uint64_t bitsFromDouble(double value) {
+    uint64_t bits;
+    std::memcpy(&bits, &value, sizeof bits);
+    return bits;
+}
+
+static int32_t javaFloatToInt(float value) {
+    if (std::isnan(value)) return 0;
+    if (value >= 2147483647.0f) return std::numeric_limits<int32_t>::max();
+    if (value <= -2147483648.0f) return std::numeric_limits<int32_t>::min();
+    return static_cast<int32_t>(value);
+}
+
+static int64_t javaFloatToLong(float value) {
+    if (std::isnan(value)) return 0;
+    if (value >= 9223372036854775808.0f) return std::numeric_limits<int64_t>::max();
+    if (value <= -9223372036854775808.0f) return std::numeric_limits<int64_t>::min();
+    return static_cast<int64_t>(value);
+}
+
+static int32_t javaDoubleToInt(double value) {
+    if (std::isnan(value)) return 0;
+    if (value >= 2147483647.0) return std::numeric_limits<int32_t>::max();
+    if (value <= -2147483648.0) return std::numeric_limits<int32_t>::min();
+    return static_cast<int32_t>(value);
+}
+
+static int64_t javaDoubleToLong(double value) {
+    if (std::isnan(value)) return 0;
+    if (value >= 9223372036854775808.0) return std::numeric_limits<int64_t>::max();
+    if (value <= -9223372036854775808.0) return std::numeric_limits<int64_t>::min();
+    return static_cast<int64_t>(value);
+}
+
+static int32_t compareFloat(float lhs, float rhs, bool nanIsGreater) {
+    if (std::isnan(lhs) || std::isnan(rhs)) return nanIsGreater ? 1 : -1;
+    return lhs > rhs ? 1 : (lhs < rhs ? -1 : 0);
+}
+
+static int32_t compareDouble(double lhs, double rhs, bool nanIsGreater) {
+    if (std::isnan(lhs) || std::isnan(rhs)) return nanIsGreater ? 1 : -1;
+    return lhs > rhs ? 1 : (lhs < rhs ? -1 : 0);
+}
+
 static bool run(JNIEnv *env, uint32_t id, const uint64_t *args, size_t argc,
                 bool expectValue, uint64_t *out) {
     loadHighValueVm(env);
@@ -237,7 +352,7 @@ static bool run(JNIEnv *env, uint32_t id, const uint64_t *args, size_t argc,
     size_t parameterOffset = 0;
     for (size_t i = 0; i < argc; ++i) {
         uint8_t kind = (p.parameterTypes >> (i * 2u)) & 0x3u;
-        if (kind == PARAM_LONG) {
+        if (kind == PARAM_LONG || kind == PARAM_DOUBLE) {
             setLong(r, static_cast<uint8_t>(parameterBase + parameterOffset), args[i]);
             parameterOffset += 2;
         } else {
@@ -322,6 +437,84 @@ static bool run(JNIEnv *env, uint32_t id, const uint64_t *args, size_t argc,
                 setLong(r, op.a, static_cast<uint64_t>(static_cast<int64_t>(r[op.b]))); ++pc; break;
             case OP_LONG_TO_INT:
                 r[op.a] = static_cast<int32_t>(static_cast<uint32_t>(getLong(r, op.b))); ++pc; break;
+            case OP_ADD_FLOAT:
+                r[op.a] = static_cast<int32_t>(bitsFromFloat(floatFromBits(
+                        static_cast<uint32_t>(r[op.b])) + floatFromBits(
+                        static_cast<uint32_t>(r[op.c])))); ++pc; break;
+            case OP_SUB_FLOAT:
+                r[op.a] = static_cast<int32_t>(bitsFromFloat(floatFromBits(
+                        static_cast<uint32_t>(r[op.b])) - floatFromBits(
+                        static_cast<uint32_t>(r[op.c])))); ++pc; break;
+            case OP_MUL_FLOAT:
+                r[op.a] = static_cast<int32_t>(bitsFromFloat(floatFromBits(
+                        static_cast<uint32_t>(r[op.b])) * floatFromBits(
+                        static_cast<uint32_t>(r[op.c])))); ++pc; break;
+            case OP_DIV_FLOAT:
+                r[op.a] = static_cast<int32_t>(bitsFromFloat(floatFromBits(
+                        static_cast<uint32_t>(r[op.b])) / floatFromBits(
+                        static_cast<uint32_t>(r[op.c])))); ++pc; break;
+            case OP_REM_FLOAT:
+                r[op.a] = static_cast<int32_t>(bitsFromFloat(std::fmod(
+                        floatFromBits(static_cast<uint32_t>(r[op.b])),
+                        floatFromBits(static_cast<uint32_t>(r[op.c]))))); ++pc; break;
+            case OP_NEG_FLOAT:
+                r[op.a] = static_cast<int32_t>(bitsFromFloat(
+                        -floatFromBits(static_cast<uint32_t>(r[op.b])))); ++pc; break;
+            case OP_CMPL_FLOAT:
+                r[op.a] = compareFloat(floatFromBits(static_cast<uint32_t>(r[op.b])),
+                        floatFromBits(static_cast<uint32_t>(r[op.c])), false); ++pc; break;
+            case OP_CMPG_FLOAT:
+                r[op.a] = compareFloat(floatFromBits(static_cast<uint32_t>(r[op.b])),
+                        floatFromBits(static_cast<uint32_t>(r[op.c])), true); ++pc; break;
+            case OP_INT_TO_FLOAT:
+                r[op.a] = static_cast<int32_t>(bitsFromFloat(static_cast<float>(r[op.b]))); ++pc; break;
+            case OP_LONG_TO_FLOAT:
+                r[op.a] = static_cast<int32_t>(bitsFromFloat(
+                        static_cast<float>(static_cast<int64_t>(getLong(r, op.b))))); ++pc; break;
+            case OP_FLOAT_TO_INT:
+                r[op.a] = javaFloatToInt(floatFromBits(static_cast<uint32_t>(r[op.b]))); ++pc; break;
+            case OP_FLOAT_TO_LONG:
+                setLong(r, op.a, static_cast<uint64_t>(javaFloatToLong(
+                        floatFromBits(static_cast<uint32_t>(r[op.b]))))); ++pc; break;
+            case OP_FLOAT_TO_DOUBLE:
+                setLong(r, op.a, bitsFromDouble(static_cast<double>(
+                        floatFromBits(static_cast<uint32_t>(r[op.b]))))); ++pc; break;
+            case OP_ADD_DOUBLE:
+                setLong(r, op.a, bitsFromDouble(doubleFromBits(getLong(r, op.b))
+                        + doubleFromBits(getLong(r, op.c)))); ++pc; break;
+            case OP_SUB_DOUBLE:
+                setLong(r, op.a, bitsFromDouble(doubleFromBits(getLong(r, op.b))
+                        - doubleFromBits(getLong(r, op.c)))); ++pc; break;
+            case OP_MUL_DOUBLE:
+                setLong(r, op.a, bitsFromDouble(doubleFromBits(getLong(r, op.b))
+                        * doubleFromBits(getLong(r, op.c)))); ++pc; break;
+            case OP_DIV_DOUBLE:
+                setLong(r, op.a, bitsFromDouble(doubleFromBits(getLong(r, op.b))
+                        / doubleFromBits(getLong(r, op.c)))); ++pc; break;
+            case OP_REM_DOUBLE:
+                setLong(r, op.a, bitsFromDouble(std::fmod(doubleFromBits(getLong(r, op.b)),
+                        doubleFromBits(getLong(r, op.c))))); ++pc; break;
+            case OP_NEG_DOUBLE:
+                setLong(r, op.a, bitsFromDouble(-doubleFromBits(getLong(r, op.b)))); ++pc; break;
+            case OP_CMPL_DOUBLE:
+                r[op.a] = compareDouble(doubleFromBits(getLong(r, op.b)),
+                        doubleFromBits(getLong(r, op.c)), false); ++pc; break;
+            case OP_CMPG_DOUBLE:
+                r[op.a] = compareDouble(doubleFromBits(getLong(r, op.b)),
+                        doubleFromBits(getLong(r, op.c)), true); ++pc; break;
+            case OP_INT_TO_DOUBLE:
+                setLong(r, op.a, bitsFromDouble(static_cast<double>(r[op.b]))); ++pc; break;
+            case OP_LONG_TO_DOUBLE:
+                setLong(r, op.a, bitsFromDouble(static_cast<double>(
+                        static_cast<int64_t>(getLong(r, op.b))))); ++pc; break;
+            case OP_DOUBLE_TO_INT:
+                r[op.a] = javaDoubleToInt(doubleFromBits(getLong(r, op.b))); ++pc; break;
+            case OP_DOUBLE_TO_LONG:
+                setLong(r, op.a, static_cast<uint64_t>(
+                        javaDoubleToLong(doubleFromBits(getLong(r, op.b))))); ++pc; break;
+            case OP_DOUBLE_TO_FLOAT:
+                r[op.a] = static_cast<int32_t>(bitsFromFloat(static_cast<float>(
+                        doubleFromBits(getLong(r, op.b))))); ++pc; break;
             case OP_CMP_LONG: {
                 int64_t lhs = static_cast<int64_t>(getLong(r, op.b));
                 int64_t rhs = static_cast<int64_t>(getLong(r, op.c));
@@ -416,6 +609,18 @@ static jlong callLong(JNIEnv *env, jint id, const uint64_t *args, size_t argc) {
             ? static_cast<jlong>(result) : 0;
 }
 
+static jfloat callFloat(JNIEnv *env, jint id, const uint64_t *args, size_t argc) {
+    uint64_t result = 0;
+    if (!run(env, static_cast<uint32_t>(id), args, argc, true, &result)) return 0.0f;
+    return floatFromBits(static_cast<uint32_t>(result));
+}
+
+static jdouble callDouble(JNIEnv *env, jint id, const uint64_t *args, size_t argc) {
+    uint64_t result = 0;
+    if (!run(env, static_cast<uint32_t>(id), args, argc, true, &result)) return 0.0;
+    return doubleFromBits(result);
+}
+
 static void callVoid(JNIEnv *env, jint id, const uint64_t *args, size_t argc) {
     (void) run(env, static_cast<uint32_t>(id), args, argc, false, nullptr);
 }
@@ -493,3 +698,25 @@ void highValueVmVJ1(JNIEnv *env, jclass, jint id, jlong a0) { const uint64_t a[]
 void highValueVmVJ2(JNIEnv *env, jclass, jint id, jlong a0, jlong a1) { const uint64_t a[]{(uint64_t)a0,(uint64_t)a1}; callVoid(env,id,a,2); }
 void highValueVmVJ3(JNIEnv *env, jclass, jint id, jlong a0, jlong a1, jlong a2) { const uint64_t a[]{(uint64_t)a0,(uint64_t)a1,(uint64_t)a2}; callVoid(env,id,a,3); }
 void highValueVmVJ4(JNIEnv *env, jclass, jint id, jlong a0, jlong a1, jlong a2, jlong a3) { const uint64_t a[]{(uint64_t)a0,(uint64_t)a1,(uint64_t)a2,(uint64_t)a3}; callVoid(env,id,a,4); }
+
+jfloat highValueVmF0(JNIEnv *env, jclass, jint id) { return callFloat(env, id, nullptr, 0); }
+jfloat highValueVmF1(JNIEnv *env, jclass, jint id, jfloat a0) { const uint64_t a[]{bitsFromFloat(a0)}; return callFloat(env,id,a,1); }
+jfloat highValueVmF2(JNIEnv *env, jclass, jint id, jfloat a0, jfloat a1) { const uint64_t a[]{bitsFromFloat(a0),bitsFromFloat(a1)}; return callFloat(env,id,a,2); }
+jfloat highValueVmF3(JNIEnv *env, jclass, jint id, jfloat a0, jfloat a1, jfloat a2) { const uint64_t a[]{bitsFromFloat(a0),bitsFromFloat(a1),bitsFromFloat(a2)}; return callFloat(env,id,a,3); }
+jfloat highValueVmF4(JNIEnv *env, jclass, jint id, jfloat a0, jfloat a1, jfloat a2, jfloat a3) { const uint64_t a[]{bitsFromFloat(a0),bitsFromFloat(a1),bitsFromFloat(a2),bitsFromFloat(a3)}; return callFloat(env,id,a,4); }
+void highValueVmVF0(JNIEnv *env, jclass, jint id) { callVoid(env,id,nullptr,0); }
+void highValueVmVF1(JNIEnv *env, jclass, jint id, jfloat a0) { const uint64_t a[]{bitsFromFloat(a0)}; callVoid(env,id,a,1); }
+void highValueVmVF2(JNIEnv *env, jclass, jint id, jfloat a0, jfloat a1) { const uint64_t a[]{bitsFromFloat(a0),bitsFromFloat(a1)}; callVoid(env,id,a,2); }
+void highValueVmVF3(JNIEnv *env, jclass, jint id, jfloat a0, jfloat a1, jfloat a2) { const uint64_t a[]{bitsFromFloat(a0),bitsFromFloat(a1),bitsFromFloat(a2)}; callVoid(env,id,a,3); }
+void highValueVmVF4(JNIEnv *env, jclass, jint id, jfloat a0, jfloat a1, jfloat a2, jfloat a3) { const uint64_t a[]{bitsFromFloat(a0),bitsFromFloat(a1),bitsFromFloat(a2),bitsFromFloat(a3)}; callVoid(env,id,a,4); }
+
+jdouble highValueVmD0(JNIEnv *env, jclass, jint id) { return callDouble(env, id, nullptr, 0); }
+jdouble highValueVmD1(JNIEnv *env, jclass, jint id, jdouble a0) { const uint64_t a[]{bitsFromDouble(a0)}; return callDouble(env,id,a,1); }
+jdouble highValueVmD2(JNIEnv *env, jclass, jint id, jdouble a0, jdouble a1) { const uint64_t a[]{bitsFromDouble(a0),bitsFromDouble(a1)}; return callDouble(env,id,a,2); }
+jdouble highValueVmD3(JNIEnv *env, jclass, jint id, jdouble a0, jdouble a1, jdouble a2) { const uint64_t a[]{bitsFromDouble(a0),bitsFromDouble(a1),bitsFromDouble(a2)}; return callDouble(env,id,a,3); }
+jdouble highValueVmD4(JNIEnv *env, jclass, jint id, jdouble a0, jdouble a1, jdouble a2, jdouble a3) { const uint64_t a[]{bitsFromDouble(a0),bitsFromDouble(a1),bitsFromDouble(a2),bitsFromDouble(a3)}; return callDouble(env,id,a,4); }
+void highValueVmVd0(JNIEnv *env, jclass, jint id) { callVoid(env,id,nullptr,0); }
+void highValueVmVd1(JNIEnv *env, jclass, jint id, jdouble a0) { const uint64_t a[]{bitsFromDouble(a0)}; callVoid(env,id,a,1); }
+void highValueVmVd2(JNIEnv *env, jclass, jint id, jdouble a0, jdouble a1) { const uint64_t a[]{bitsFromDouble(a0),bitsFromDouble(a1)}; callVoid(env,id,a,2); }
+void highValueVmVd3(JNIEnv *env, jclass, jint id, jdouble a0, jdouble a1, jdouble a2) { const uint64_t a[]{bitsFromDouble(a0),bitsFromDouble(a1),bitsFromDouble(a2)}; callVoid(env,id,a,3); }
+void highValueVmVd4(JNIEnv *env, jclass, jint id, jdouble a0, jdouble a1, jdouble a2, jdouble a3) { const uint64_t a[]{bitsFromDouble(a0),bitsFromDouble(a1),bitsFromDouble(a2),bitsFromDouble(a3)}; callVoid(env,id,a,4); }
